@@ -932,28 +932,101 @@ const char *str_ee_origin(const struct sock_extended_err *ee)
 void close_open_files(int argc, char **argv)
 {
 	const struct option optfd[] = { { "fd", required_argument, NULL, 'F' },
+					{ "pass-fds", required_argument, NULL, 33 },
 					{ 0 },
 				      };
 	long fd = -1;
-	int name, rc;
+	const char *pass_fds_arg = NULL;
+	int name, rc = 0;
+	int old_opterr = opterr;
 
+	opterr = 0;
 	do {
 		name = getopt_long(argc, argv, "-:F:", optfd, NULL);
 
 		if (name == 'F')
 			fd = conf_tap_fd(optarg);
+		else if (name == 33)
+			pass_fds_arg = optarg;
 	} while (name != -1);
+	opterr = old_opterr;
 
-	if (fd == -1) {
-		rc = close_range(STDERR_FILENO + 1, ~0U, CLOSE_RANGE_UNSHARE);
-	} else if (fd == STDERR_FILENO + 1) { /* Still a single range */
-		rc = close_range(STDERR_FILENO + 2, ~0U, CLOSE_RANGE_UNSHARE);
-	} else {
-		rc = close_range(STDERR_FILENO + 1, fd - 1,
-				 CLOSE_RANGE_UNSHARE);
-		if (!rc)
-			rc = close_range(fd + 1, ~0U, CLOSE_RANGE_UNSHARE);
+	#define MAX_PASS_FDS 1024
+	unsigned int keep_fds[MAX_PASS_FDS];
+	int keep_fds_cnt = 0;
+
+	if (fd != -1 && fd > STDERR_FILENO) {
+		keep_fds[keep_fds_cnt++] = (unsigned int)fd;
 	}
+
+	if (pass_fds_arg) {
+		const char *p = pass_fds_arg;
+		while (*p) {
+			char *endptr;
+			unsigned long val = strtoul(p, &endptr, 10);
+			if (p == endptr) {
+				die("Invalid --pass-fds option: %s", pass_fds_arg);
+			}
+			if (val > INT_MAX || val <= STDERR_FILENO) {
+				die("Invalid file descriptor in --pass-fds: %lu", val);
+			}
+			if (keep_fds_cnt >= MAX_PASS_FDS) {
+				die("Too many file descriptors in --pass-fds");
+			}
+			keep_fds[keep_fds_cnt++] = (unsigned int)val;
+			if (*endptr == ',') {
+				p = endptr + 1;
+				if (*p == '\0') {
+					die("Invalid --pass-fds option: trailing comma");
+				}
+			} else if (*endptr == '\0') {
+				p = endptr;
+			} else {
+				die("Invalid character in --pass-fds option: %s", pass_fds_arg);
+			}
+		}
+	}
+
+	/* Sort keep_fds in ascending order */
+	for (int i = 1; i < keep_fds_cnt; i++) {
+		unsigned int key = keep_fds[i];
+		int j = i - 1;
+		while (j >= 0 && keep_fds[j] > key) {
+			keep_fds[j + 1] = keep_fds[j];
+			j--;
+		}
+		keep_fds[j + 1] = key;
+	}
+
+	/* Remove duplicates */
+	int write_idx = 0;
+	for (int i = 0; i < keep_fds_cnt; i++) {
+		if (i == 0 || keep_fds[i] != keep_fds[i - 1]) {
+			keep_fds[write_idx++] = keep_fds[i];
+		}
+	}
+	keep_fds_cnt = write_idx;
+
+	/* Close ranges */
+	unsigned int current = STDERR_FILENO + 1;
+	for (int i = 0; i < keep_fds_cnt; i++) {
+		unsigned int f = keep_fds[i];
+		if (current < f) {
+			int call_rc = close_range(current, f - 1, CLOSE_RANGE_UNSHARE);
+			if (call_rc != 0)
+				rc = call_rc;
+		}
+		current = f + 1;
+	}
+	if (keep_fds_cnt == 0 || keep_fds[keep_fds_cnt - 1] < ~0U) {
+		int call_rc = close_range(current, ~0U, CLOSE_RANGE_UNSHARE);
+		if (call_rc != 0)
+			rc = call_rc;
+	}
+
+	/* Note: We assume that the parent process did not set FD_CLOEXEC on the
+	 * passed file descriptors, so we do not explicitly clear it here.
+	 */
 
 	if (rc) {
 		if (errno == ENOSYS || errno == EINVAL) {
