@@ -732,7 +732,9 @@ pasta_opts:
 		"			Don't copy all addresses to namespace\n"
 		"  --ns-mac-addr ADDR	Set MAC address on tap interface\n"
 		"  --no-splice		Disable inbound socket splicing\n"
-		"  --splice-only	Only enable loopback forwarding\n");
+		"  --splice-only	Only enable loopback forwarding\n"
+		"  --pass-fds FDS	Comma-separated list of fds to pass to\n"
+		"			the spawned command\n");
 
 	passt_exit(status);
 }
@@ -1316,6 +1318,7 @@ void conf(struct ctx *c, int argc, char **argv)
 		{"stats", required_argument,		NULL,		31 },
 		{"conf-path",	required_argument,	NULL,		'c' },
 		{"chroot-fallback", no_argument,	NULL, 		32 },
+		{"pass-fds",	required_argument,	NULL,		33 },
 		{ 0 },
 	};
 	const char *optstring = "+dqfel:hs:c:F:I:p:P:m:a:n:M:g:i:o:D:S:H:461t:u:T:U:";
@@ -1556,6 +1559,10 @@ void conf(struct ctx *c, int argc, char **argv)
 			break;
 		case 32:
 			c->chroot_fallback = true;
+			break;
+		case 33:
+			if (c->mode != MODE_PASTA)
+				die("--pass-fds is for pasta mode only");
 			break;
 		case 'd':
 			c->debug = 1;
