@@ -249,148 +249,56 @@ void isolate_initial(void)
 }
 
 /*
- * isolate_fds() - Close leaked files, but not --fd, stdin, stdout, stderr
+ * isolate_fds() - Close leaked files, but not --fd, --pass-fds, standard streams
  * @argc:	Argument count
- * @argv:	Command line options, as we need to skip any file given via --fd
+ * @argv:	Command line options
  *
  * Should:
- *  - close all open files except for standard streams and the one from --fd
- *  - move the --fd descriptor out of the range 0-2
+ *  - close all open files except for standard streams, --fd, and --pass-fds
  *
- * Return: new fd number for descriptor from --fd, or -1 if not specified
+ * Return: fd number for descriptor from --fd, or -1 if not specified
  */
 int isolate_fds(int argc, char **argv)
 {
-	int fd, close_from = STDERR_FILENO + 1;
+	int prev_fd = STDERR_FILENO;
+	int fds[1024 + 1];
+	int fds_cnt = 0;
+	int tap_fd;
+	int rc = 0;
 
-	fd = conf_tap_fd(argc, argv);
+	tap_fd = conf_tap_fd(argc, argv);
+	if (tap_fd >= 0)
+		fds[fds_cnt++] = tap_fd;
 
-	if (fd >= 0) {
-		/* Move the passed fd to a more convenient location */
-		if (fd != close_from			&&
-		    (dup2(fd, close_from) != close_from	||
-		     close(fd)))
-			die_perror("Could not move --fd descriptor");
-		fd = close_from++;
-	}
+	rc = conf_pass_fds(argc, argv, fds + fds_cnt, 1024);
+	if (rc > 0)
+		fds_cnt += rc;
 
-	if (close_range(close_from, ~0U, CLOSE_RANGE_UNSHARE)) {
-		if (errno == ENOSYS || errno == EINVAL) {
-			/* This probably means close_range() or the
-			 * CLOSE_RANGE_UNSHARE flag is not supported by the
-			 * kernel.  Not much we can do here except carry on and
-			 * hope for the best.
-			 */
-			warn(
-"Can't use close_range() to ensure no files leaked by parent");
-		} else {
-			die_perror("Failed to close files leaked by parent");
+	rc = 0;
+
+	while (fds_cnt > 0) {
+		int min_idx = 0;
+		int min_fd;
+
+		for (int i = 1; i < fds_cnt; i++) {
+			if (fds[i] < fds[min_idx])
+				min_idx = i;
 		}
-	}
+		min_fd = fds[min_idx];
 
-	return fd;
-}
-/*
- * close_open_files() - TODO: merge with isolate_fds
- */
-void close_open_files(int argc, char **argv)
-{
-	const struct option optfd[] = { { "fd", required_argument, NULL, 'F' },
-					{ "pass-fds", required_argument, NULL, 33 },
-					{ 0 },
-				      };
-	long fd = -1;
-	const char *pass_fds_arg = NULL;
-	int name, rc = 0;
-	int old_opterr = opterr;
+		fds[min_idx] = fds[--fds_cnt];
 
-	opterr = 0;
-	do {
-		name = getopt_long(argc, argv, "-:F:", optfd, NULL);
-
-		if (name == 'F')
-			fd = conf_tap_fd(optarg);
-		else if (name == 33)
-			pass_fds_arg = optarg;
-	} while (name != -1);
-	opterr = old_opterr;
-
-	#define MAX_PASS_FDS 1024
-	unsigned int keep_fds[MAX_PASS_FDS];
-	int keep_fds_cnt = 0;
-
-	if (fd != -1 && fd > STDERR_FILENO) {
-		keep_fds[keep_fds_cnt++] = (unsigned int)fd;
-	}
-
-	if (pass_fds_arg) {
-		const char *p = pass_fds_arg;
-		while (*p) {
-			char *endptr;
-			unsigned long val = strtoul(p, &endptr, 10);
-			if (p == endptr) {
-				die("Invalid --pass-fds option: %s", pass_fds_arg);
+		if (min_fd > prev_fd) {
+			if (min_fd > prev_fd + 1) {
+				if (close_range(prev_fd + 1, min_fd - 1, CLOSE_RANGE_UNSHARE))
+					rc = -1;
 			}
-			if (val > INT_MAX || val <= STDERR_FILENO) {
-				die("Invalid file descriptor in --pass-fds: %lu", val);
-			}
-			if (keep_fds_cnt >= MAX_PASS_FDS) {
-				die("Too many file descriptors in --pass-fds");
-			}
-			keep_fds[keep_fds_cnt++] = (unsigned int)val;
-			if (*endptr == ',') {
-				p = endptr + 1;
-				if (*p == '\0') {
-					die("Invalid --pass-fds option: trailing comma");
-				}
-			} else if (*endptr == '\0') {
-				p = endptr;
-			} else {
-				die("Invalid character in --pass-fds option: %s", pass_fds_arg);
-			}
+			prev_fd = min_fd;
 		}
 	}
 
-	/* Sort keep_fds in ascending order */
-	for (int i = 1; i < keep_fds_cnt; i++) {
-		unsigned int key = keep_fds[i];
-		int j = i - 1;
-		while (j >= 0 && keep_fds[j] > key) {
-			keep_fds[j + 1] = keep_fds[j];
-			j--;
-		}
-		keep_fds[j + 1] = key;
-	}
-
-	/* Remove duplicates */
-	int write_idx = 0;
-	for (int i = 0; i < keep_fds_cnt; i++) {
-		if (i == 0 || keep_fds[i] != keep_fds[i - 1]) {
-			keep_fds[write_idx++] = keep_fds[i];
-		}
-	}
-	keep_fds_cnt = write_idx;
-
-	/* Close ranges */
-	unsigned int current = STDERR_FILENO + 1;
-	for (int i = 0; i < keep_fds_cnt; i++) {
-		unsigned int f = keep_fds[i];
-		if (current < f) {
-			int call_rc = close_range(current, f - 1, CLOSE_RANGE_UNSHARE);
-			if (call_rc != 0)
-				rc = call_rc;
-		}
-		current = f + 1;
-	}
-	if (keep_fds_cnt == 0 || keep_fds[keep_fds_cnt - 1] < ~0U) {
-		int call_rc = close_range(current, ~0U, CLOSE_RANGE_UNSHARE);
-		if (call_rc != 0)
-			rc = call_rc;
-	}
-
-	/* Note: We assume that the parent process did not set FD_CLOEXEC on the
-	 * passed file descriptors, so we do not explicitly clear it here.
-	 */
+	if (close_range(prev_fd + 1, ~0U, CLOSE_RANGE_UNSHARE))
+		rc = -1;
 
 	if (rc) {
 		if (errno == ENOSYS || errno == EINVAL) {
@@ -406,6 +314,7 @@ void close_open_files(int argc, char **argv)
 		}
 	}
 
+	return tap_fd;
 }
 
 /**
