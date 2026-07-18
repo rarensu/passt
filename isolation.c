@@ -276,25 +276,22 @@ int isolate_fds(int argc, char **argv)
 
 	rc = 0;
 
-	while (fds_cnt > 0) {
-		int min_idx = 0;
-		int min_fd;
+	while (1) {
+		int min_fd = -1;
 
-		for (int i = 1; i < fds_cnt; i++) {
-			if (fds[i] < fds[min_idx])
-				min_idx = i;
+		for (int i = 0; i < fds_cnt; i++) {
+			if (fds[i] > prev_fd && (min_fd == -1 || fds[i] < min_fd))
+				min_fd = fds[i];
 		}
-		min_fd = fds[min_idx];
 
-		fds[min_idx] = fds[--fds_cnt];
+		if (min_fd == -1)
+			break;
 
-		if (min_fd > prev_fd) {
-			if (min_fd > prev_fd + 1) {
-				if (close_range(prev_fd + 1, min_fd - 1, CLOSE_RANGE_UNSHARE))
-					rc = -1;
-			}
-			prev_fd = min_fd;
+		if (min_fd > prev_fd + 1) {
+			if (close_range(prev_fd + 1, min_fd - 1, CLOSE_RANGE_UNSHARE))
+				rc = -1;
 		}
+		prev_fd = min_fd;
 	}
 
 	if (close_range(prev_fd + 1, ~0U, CLOSE_RANGE_UNSHARE))
