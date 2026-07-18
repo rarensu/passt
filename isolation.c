@@ -267,6 +267,16 @@ int isolate_fds(int argc, char **argv)
 	int rc = 0;
 
 	tap_fd = conf_tap_fd(argc, argv);
+	if (tap_fd >= 0 && tap_fd < 3) {
+		int new_fd = fcntl(tap_fd, F_DUPFD, 3);
+
+		if (new_fd < 0)
+			die_perror("Could not relocate --fd descriptor");
+
+		close(tap_fd);
+		tap_fd = new_fd;
+	}
+
 	if (tap_fd >= 0)
 		fds[fds_cnt++] = tap_fd;
 
