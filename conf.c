@@ -732,7 +732,9 @@ pasta_opts:
 		"			Don't copy all addresses to namespace\n"
 		"  --ns-mac-addr ADDR	Set MAC address on tap interface\n"
 		"  --no-splice		Disable inbound socket splicing\n"
-		"  --splice-only	Only enable loopback forwarding\n");
+		"  --splice-only	Only enable loopback forwarding\n"
+		"  --pass-fds FDS	Comma-separated list of fds to pass to\n"
+		"			the spawned command\n");
 
 	passt_exit(status);
 }
@@ -1184,6 +1186,63 @@ int conf_tap_fd(int argc, char **argv)
 }
 
 /**
+ * conf_pass_fds() - Read fds as supplied by --pass-fds command line option
+ * @argc:	Argument count
+ * @argv:	Command line options
+ * @fds:	Array where we store the parsed fds
+ * @max_fds:	Maximum size of the array
+ *
+ * Return: number of parsed fds, or -1 if option not specified
+ */
+int conf_pass_fds(int argc, char **argv, int *fds, int max_fds)
+{
+	const struct option opt[] = { { "pass-fds", required_argument, NULL, 33 },
+				      { 0 }, };
+	const char *fdsarg = NULL;
+	int name, fds_cnt = 0;
+	int old_opterr;
+
+	old_opterr = opterr;
+	opterr = 0;
+	optind = 0;
+	do {
+		name = getopt_long(argc, argv, "-:", opt, NULL);
+		if (name == 33)
+			fdsarg = optarg;
+	} while (name != -1);
+	opterr = old_opterr;
+
+	if (!fdsarg)
+		return -1;
+
+	while (*fdsarg) {
+		unsigned long val;
+		char *endptr;
+
+		val = strtoul(fdsarg, &endptr, 10);
+		if (fdsarg == endptr)
+			die("Invalid --pass-fds option: %s", fdsarg);
+
+		if (val > INT_MAX)
+			die("Invalid file descriptor in --pass-fds: %lu", val);
+
+		if (fds_cnt >= max_fds)
+			die("Too many file descriptors in --pass-fds");
+
+		fds[fds_cnt++] = (int)val;
+
+		if (*endptr == ',')
+			fdsarg = endptr + 1;
+		else if (*endptr == '\0')
+			fdsarg = endptr;
+		else
+			die("Invalid character in --pass-fds option: %s", fdsarg);
+	}
+
+	return fds_cnt;
+}
+
+/**
  * conf_addr() - Configure guest address with -a option
  * @c:		Execution context
  * @arg:	-a command line argument
@@ -1331,6 +1390,7 @@ void conf(struct ctx *c, int argc, char **argv)
 		{"stats", required_argument,		NULL,		31 },
 		{"conf-path",	required_argument,	NULL,		'c' },
 		{"chroot-fallback", no_argument,	NULL, 		32 },
+		{"pass-fds",	required_argument,	NULL,		33 },
 		{ 0 },
 	};
 	const char *optstring = "+dqfel:hs:c:F:I:p:P:m:a:n:M:g:i:o:D:S:H:461t:u:T:U:";
@@ -1571,6 +1631,10 @@ void conf(struct ctx *c, int argc, char **argv)
 			break;
 		case 32:
 			c->chroot_fallback = true;
+			break;
+		case 33:
+			if (c->mode != MODE_PASTA)
+				die("--pass-fds is for pasta mode only");
 			break;
 		case 'd':
 			c->debug = 1;

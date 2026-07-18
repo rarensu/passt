@@ -249,32 +249,75 @@ void isolate_initial(void)
 }
 
 /*
- * isolate_fds() - Close leaked files, but not --fd, stdin, stdout, stderr
+ * isolate_fds() - Close leaked files, but not --fd, --pass-fds, standard streams
  * @argc:	Argument count
- * @argv:	Command line options, as we need to skip any file given via --fd
+ * @argv:	Command line options
  *
  * Should:
- *  - close all open files except for standard streams and the one from --fd
+ *  - close all open files except for standard streams, --fd, and --pass-fds
  *  - move the --fd descriptor out of the range 0-2
  *
  * Return: new fd number for descriptor from --fd, or -1 if not specified
  */
 int isolate_fds(int argc, char **argv)
 {
-	int fd, close_from = STDERR_FILENO + 1;
+	int fds[1024 + 1];
+	int fds_cnt = 0;
+	int prev_fd;
+	int tap_fd;
+	int rc = 0;
 
-	fd = conf_tap_fd(argc, argv);
+	tap_fd = conf_tap_fd(argc, argv);
+	if (tap_fd >= 0 && tap_fd < 3) {
+		/* Move the tap fd to a safer location */
+		int new_fd = fcntl(tap_fd, F_DUPFD, STDERR_FILENO + 1);
+		
+		if (new_fd < 0)
+			die_perror("Could not relocate --fd descriptor");
 
-	if (fd >= 0) {
-		/* Move the passed fd to a more convenient location */
-		if (fd != close_from			&&
-		    (dup2(fd, close_from) != close_from	||
-		     close(fd)))
-			die_perror("Could not move --fd descriptor");
-		fd = close_from++;
+		close(tap_fd);
+		tap_fd = new_fd;
 	}
 
-	if (close_range(close_from, ~0U, CLOSE_RANGE_UNSHARE)) {
+	if (tap_fd >= 0)
+		/* Keep the tap fd */
+		fds[fds_cnt++] = tap_fd;
+
+	rc = conf_pass_fds(argc, argv, fds + fds_cnt, 1024);
+	if (rc > 0)
+		/* Keep the pass-fds */
+		fds_cnt += rc;
+
+	rc = 0;
+	
+	/* Keep standard streams */
+	prev_fd = STDERR_FILENO;
+
+	while (1) {
+		int next_fd = -1;
+
+		/* Find the next-lowest fd to keep */
+		for (int i = 0; i < fds_cnt; i++) {
+			if (fds[i] > prev_fd && (next_fd == -1 || fds[i] < next_fd))
+				next_fd = fds[i];
+		}
+
+		if (next_fd == -1)
+			break;
+
+		if (next_fd > prev_fd + 1) {
+			/* Close fds between two kept fds */
+			if (close_range(prev_fd + 1, next_fd - 1, CLOSE_RANGE_UNSHARE))
+				rc = -1;
+		}
+		prev_fd = next_fd;
+	}
+	
+	/* Close all other fds */
+	if (close_range(prev_fd + 1, ~0U, CLOSE_RANGE_UNSHARE))
+		rc = -1;
+
+	if (rc) {
 		if (errno == ENOSYS || errno == EINVAL) {
 			/* This probably means close_range() or the
 			 * CLOSE_RANGE_UNSHARE flag is not supported by the
@@ -288,7 +331,7 @@ int isolate_fds(int argc, char **argv)
 		}
 	}
 
-	return fd;
+	return tap_fd;
 }
 
 /**

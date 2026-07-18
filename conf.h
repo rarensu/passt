@@ -7,6 +7,7 @@
 #define CONF_H
 
 enum passt_modes conf_mode(int argc, char *argv[]);
+int conf_pass_fds(int argc, char **argv, int *fds, int max_fds);
 int conf_tap_fd(int argc, char **argv);
 void conf(struct ctx *c, int argc, char **argv);
 void conf_listen_handler(struct ctx *c, uint32_t events);
