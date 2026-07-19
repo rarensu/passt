@@ -1215,16 +1215,22 @@ int conf_pass_fds(int argc, char **argv, int *fds, int max_fds)
 	if (!fdsarg)
 		return -1;
 
+	const char *orig_fdsarg = fdsarg;
+
 	while (*fdsarg) {
 		unsigned long val;
 		char *endptr;
 
 		val = strtoul(fdsarg, &endptr, 10);
-		if (fdsarg == endptr)
-			die("Invalid --pass-fds option: %s", fdsarg);
+		if (fdsarg == endptr) {
+			die("Invalid character in --pass-fds option '%s' (near '%s')",
+			    orig_fdsarg, fdsarg);
+		}
 
-		if (val > INT_MAX)
-			die("Invalid file descriptor in --pass-fds: %lu", val);
+		if (val > INT_MAX) {
+			die("Invalid file descriptor in --pass-fds option '%s' (near '%s')",
+			    orig_fdsarg, fdsarg);
+		}
 
 		if (fds_cnt >= max_fds)
 			die("Too many file descriptors in --pass-fds");
@@ -1235,8 +1241,10 @@ int conf_pass_fds(int argc, char **argv, int *fds, int max_fds)
 			fdsarg = endptr + 1;
 		else if (*endptr == '\0')
 			fdsarg = endptr;
-		else
-			die("Invalid character in --pass-fds option: %s", fdsarg);
+		else {
+			die("Invalid character in --pass-fds option '%s' (near '%s')",
+			    orig_fdsarg, endptr);
+		}
 	}
 
 	return fds_cnt;

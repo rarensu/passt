@@ -261,17 +261,19 @@ void isolate_initial(void)
  */
 int isolate_fds(int argc, char **argv)
 {
-	int fds[1024 + 1];
+	int fds[PASS_FDS_MAX + 1];
 	int fds_cnt = 0;
 	int prev_fd;
+	int next_fd;
 	int tap_fd;
 	int rc = 0;
+	int i;
 
 	tap_fd = conf_tap_fd(argc, argv);
 	if (tap_fd >= 0 && tap_fd < 3) {
 		/* Move the tap fd to a safer location */
 		int new_fd = fcntl(tap_fd, F_DUPFD, STDERR_FILENO + 1);
-		
+
 		if (new_fd < 0)
 			die_perror("Could not relocate --fd descriptor");
 
@@ -283,21 +285,21 @@ int isolate_fds(int argc, char **argv)
 		/* Keep the tap fd */
 		fds[fds_cnt++] = tap_fd;
 
-	rc = conf_pass_fds(argc, argv, fds + fds_cnt, 1024);
+	rc = conf_pass_fds(argc, argv, fds + fds_cnt, PASS_FDS_MAX);
 	if (rc > 0)
 		/* Keep the pass-fds */
 		fds_cnt += rc;
 
 	rc = 0;
-	
+
 	/* Keep standard streams */
 	prev_fd = STDERR_FILENO;
 
 	while (1) {
-		int next_fd = -1;
+		next_fd = -1;
 
 		/* Find the next-lowest fd to keep */
-		for (int i = 0; i < fds_cnt; i++) {
+		for (i = 0; i < fds_cnt; i++) {
 			if (fds[i] > prev_fd && (next_fd == -1 || fds[i] < next_fd))
 				next_fd = fds[i];
 		}
