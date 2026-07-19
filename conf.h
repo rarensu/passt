@@ -6,6 +6,8 @@
 #ifndef CONF_H
 #define CONF_H
 
+#define PASS_FDS_MAX	1024
+
 enum passt_modes conf_mode(int argc, char *argv[]);
 int conf_pass_fds(int argc, char **argv, int *fds, int max_fds);
 int conf_tap_fd(int argc, char **argv);
