@@ -94,6 +94,7 @@
 #include "log.h"
 #include "isolation.h"
 #include "conf.h"
+#include "netlink.h"
 
 #define CAP_VERSION	_LINUX_CAPABILITY_VERSION_3
 #define CAP_WORDS	_LINUX_CAPABILITY_U32S_3
@@ -249,48 +250,50 @@ void isolate_initial(void)
 }
 
 /*
- * isolate_fds() - Close leaked files, but not --fd, --pass-fds, standard streams
- * @argc:	Argument count
- * @argv:	Command line options
+ * isolate_fds() - Close leaked files, keeping standard streams and active fds
+ * @c:		Execution context
  *
  * Should:
- *  - close all open files except for standard streams, --fd, and --pass-fds
- *  - move the --fd descriptor out of the range 0-2
- *
- * Return: new fd number for descriptor from --fd, or -1 if not specified
+ *  - close all open files except for standard streams and active fds in c/global
  */
-int isolate_fds(int argc, char **argv)
+void isolate_fds(const struct ctx *c)
 {
-	int fds[PASS_FDS_MAX + 1];
 	int fds_cnt = 0;
 	int prev_fd;
 	int next_fd;
-	int tap_fd;
+	int fds[16];
 	int rc = 0;
 	int i;
 
-	tap_fd = conf_tap_fd(argc, argv);
-	if (tap_fd >= 0 && tap_fd < 3) {
-		/* Move the tap fd to a safer location */
-		int new_fd = fcntl(tap_fd, F_DUPFD, STDERR_FILENO + 1);
+	if (c->epollfd >= 0)
+		fds[fds_cnt++] = c->epollfd;
+	if (c->pidfile_fd >= 0)
+		fds[fds_cnt++] = c->pidfile_fd;
+	if (c->fd_tap >= 0)
+		fds[fds_cnt++] = c->fd_tap;
+	if (c->fd_tap_listen >= 0)
+		fds[fds_cnt++] = c->fd_tap_listen;
+	if (c->fd_control >= 0)
+		fds[fds_cnt++] = c->fd_control;
+	if (c->fd_control_listen >= 0)
+		fds[fds_cnt++] = c->fd_control_listen;
+	if (c->fd_repair >= 0)
+		fds[fds_cnt++] = c->fd_repair;
+	if (c->fd_repair_listen >= 0)
+		fds[fds_cnt++] = c->fd_repair_listen;
+	if (c->pasta_netns_fd >= 0)
+		fds[fds_cnt++] = c->pasta_netns_fd;
+	if (c->device_state_fd >= 0)
+		fds[fds_cnt++] = c->device_state_fd;
+	if (c->devnull_fd >= 0)
+		fds[fds_cnt++] = c->devnull_fd;
 
-		if (new_fd < 0)
-			die_perror("Could not relocate --fd descriptor");
-
-		close(tap_fd);
-		tap_fd = new_fd;
-	}
-
-	if (tap_fd >= 0)
-		/* Keep the tap fd */
-		fds[fds_cnt++] = tap_fd;
-
-	rc = conf_pass_fds(argc, argv, fds + fds_cnt, PASS_FDS_MAX);
-	if (rc > 0)
-		/* Keep the pass-fds */
-		fds_cnt += rc;
-
-	rc = 0;
+	if (log_file >= 0)
+		fds[fds_cnt++] = log_file;
+	if (nl_sock >= 0)
+		fds[fds_cnt++] = nl_sock;
+	if (nl_sock_ns >= 0)
+		fds[fds_cnt++] = nl_sock_ns;
 
 	/* Keep standard streams */
 	prev_fd = STDERR_FILENO;
@@ -314,7 +317,7 @@ int isolate_fds(int argc, char **argv)
 		}
 		prev_fd = next_fd;
 	}
-	
+
 	/* Close all other fds */
 	if (close_range(prev_fd + 1, ~0U, CLOSE_RANGE_UNSHARE))
 		rc = -1;
@@ -332,8 +335,6 @@ int isolate_fds(int argc, char **argv)
 			die_perror("Failed to close files leaked by parent");
 		}
 	}
-
-	return tap_fd;
 }
 
 /**

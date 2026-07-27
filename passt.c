@@ -64,6 +64,7 @@ char pkt_buf[PKT_BUF_BYTES]	__attribute__ ((aligned(PAGE_SIZE)));
 
 struct ctx passt_ctx = {
 	.pidfile_fd		= -1,
+	.devnull_fd		= -1,
 	.fd_tap			= -1,
 	.fd_tap_listen		= -1,
 	.fd_control_listen	= -1,
@@ -345,14 +346,14 @@ int main(int argc, char **argv)
 	arch_avx2_exec(argv);
 
 	isolate_initial();
-	c->fd_tap = isolate_fds(argc, argv);
 
 	if ((devnull_fd = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0)
 		die_perror("Failed to open /dev/null");
+	c->devnull_fd = devnull_fd;
 	/* Ensure fds 0-2 are populated */
 	for (fd = 0; fd <= STDERR_FILENO; fd++) {
 		if (fcntl(fd, F_GETFD) < 0 &&
-		    dup2(devnull_fd, fd) < 0)
+		    dup2(c->devnull_fd, fd) < 0)
 			die_perror("Failed to populate fd %d", fd);
 	}
 
@@ -390,6 +391,7 @@ int main(int argc, char **argv)
 	sock_probe_features(c);
 
 	conf(c, argc, argv);
+	isolate_fds(c);
 	trace_init(c->trace);
 
 	pasta_netns_quit_init(c);
@@ -427,7 +429,7 @@ int main(int argc, char **argv)
 		die("Failed to sandbox process, exiting");
 
 	if (!c->foreground) {
-		__daemon(c->pidfile_fd, devnull_fd);
+		__daemon(c->pidfile_fd, c->devnull_fd);
 		log_stderr = false;
 	} else {
 		pidfile_write(c->pidfile_fd, getpid());
@@ -438,8 +440,10 @@ int main(int argc, char **argv)
 		c->pidfile_fd = -1;
 	}
 
-	if (devnull_fd > STDERR_FILENO)
-		close(devnull_fd);
+	if (c->devnull_fd > STDERR_FILENO) {
+		close(c->devnull_fd);
+		c->devnull_fd = -1;
+	}
 
 	if (pasta_child_pid) {
 		kill(pasta_child_pid, SIGUSR1);

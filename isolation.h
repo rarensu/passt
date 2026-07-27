@@ -10,8 +10,10 @@
 #include <stdbool.h>
 #include <unistd.h>
 
+struct ctx;
+
 void isolate_initial(void);
-int isolate_fds(int argc, char **argv);
+void isolate_fds(const struct ctx *c);
 void isolate_user(const struct ctx *c, uid_t uid, gid_t gid, bool use_userns,
 		  const char *userns);
 int isolate_prefork(const struct ctx *c);

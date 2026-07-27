@@ -732,9 +732,7 @@ pasta_opts:
 		"			Don't copy all addresses to namespace\n"
 		"  --ns-mac-addr ADDR	Set MAC address on tap interface\n"
 		"  --no-splice		Disable inbound socket splicing\n"
-		"  --splice-only	Only enable loopback forwarding\n"
-		"  --pass-fds FDS	Comma-separated list of fds to pass to\n"
-		"			the spawned command\n");
+		"  --splice-only	Only enable loopback forwarding\n");
 
 	passt_exit(status);
 }
@@ -1154,26 +1152,17 @@ static void conf_sock_listen(const struct ctx *c)
 }
 
 /**
- * conf_tap_fd() - Read tap fd as supplied by -F command line option
- * @argc:	Argument count
- * @argv:	Command line options
+ * conf_tap_fd() - Read and relocate tap fd as supplied by -F command line option
+ * @fdarg:	String containing fd
  *
  * Return: fd number from --fd option, or -1 if not supplied
  */
-int conf_tap_fd(int argc, char **argv)
+int conf_tap_fd(const char *fdarg)
 {
-	const struct option optfd[] = {	{ "fd", required_argument, NULL, 'F' },
-					{ 0 }, };
-	const char *fdarg = NULL, *p;
 	unsigned long val;
-	int name;
-
-	optind = 0;
-	do {
-		name = getopt_long(argc, argv, "-:F:", optfd, NULL);
-		if (name == 'F')
-			fdarg = optarg;
-	} while (name != -1);
+	const char *p;
+	int new_fd;
+	int fd;
 
 	if (!fdarg)
 		return -1;
@@ -1182,72 +1171,18 @@ int conf_tap_fd(int argc, char **argv)
 	if (!parse_unsigned(&p, 0, &val) || !parse_eoi(p) || val > INT_MAX)
 		die("Invalid --fd: %s", fdarg);
 
-	return val;
-}
+	fd = (int)val;
+	if (fd >= 0 && fd < 3) {
+		new_fd = fcntl(fd, F_DUPFD, 3);
 
-/**
- * conf_pass_fds() - Read fds as supplied by --pass-fds command line option
- * @argc:	Argument count
- * @argv:	Command line options
- * @fds:	Array where we store the parsed fds
- * @max_fds:	Maximum size of the array
- *
- * Return: number of parsed fds, or -1 if option not specified
- */
-int conf_pass_fds(int argc, char **argv, int *fds, int max_fds)
-{
-	const struct option opt[] = { { "pass-fds", required_argument, NULL, 33 },
-				      { 0 }, };
-	const char *fdsarg = NULL;
-	int name, fds_cnt = 0;
-	int old_opterr;
+		if (new_fd < 0)
+			die_perror("Could not relocate --fd descriptor");
 
-	old_opterr = opterr;
-	opterr = 0;
-	optind = 0;
-	do {
-		name = getopt_long(argc, argv, "-:", opt, NULL);
-		if (name == 33)
-			fdsarg = optarg;
-	} while (name != -1);
-	opterr = old_opterr;
-
-	if (!fdsarg)
-		return -1;
-
-	const char *orig_fdsarg = fdsarg;
-
-	while (*fdsarg) {
-		unsigned long val;
-		char *endptr;
-
-		val = strtoul(fdsarg, &endptr, 10);
-		if (fdsarg == endptr) {
-			die("Invalid character in --pass-fds option '%s' (near '%s')",
-			    orig_fdsarg, fdsarg);
-		}
-
-		if (val > INT_MAX) {
-			die("Invalid file descriptor in --pass-fds option '%s' (near '%s')",
-			    orig_fdsarg, fdsarg);
-		}
-
-		if (fds_cnt >= max_fds)
-			die("Too many file descriptors in --pass-fds");
-
-		fds[fds_cnt++] = (int)val;
-
-		if (*endptr == ',')
-			fdsarg = endptr + 1;
-		else if (*endptr == '\0')
-			fdsarg = endptr;
-		else {
-			die("Invalid character in --pass-fds option '%s' (near '%s')",
-			    orig_fdsarg, endptr);
-		}
+		close(fd);
+		fd = new_fd;
 	}
 
-	return fds_cnt;
+	return fd;
 }
 
 /**
@@ -1398,7 +1333,6 @@ void conf(struct ctx *c, int argc, char **argv)
 		{"stats", required_argument,		NULL,		31 },
 		{"conf-path",	required_argument,	NULL,		'c' },
 		{"chroot-fallback", no_argument,	NULL, 		32 },
-		{"pass-fds",	required_argument,	NULL,		33 },
 		{ 0 },
 	};
 	const char *optstring = "+dqfel:hs:c:F:I:p:P:m:a:n:M:g:i:o:D:S:H:461t:u:T:U:";
@@ -1640,10 +1574,6 @@ void conf(struct ctx *c, int argc, char **argv)
 		case 32:
 			c->chroot_fallback = true;
 			break;
-		case 33:
-			if (c->mode != MODE_PASTA)
-				die("--pass-fds is for pasta mode only");
-			break;
 		case 'd':
 			c->debug = 1;
 			c->quiet = 0;
@@ -1680,7 +1610,7 @@ void conf(struct ctx *c, int argc, char **argv)
 			c->fd_control_listen = c->fd_control = -1;
 			break;
 		case 'F':
-			/* --fd was parsed early and c->fd_tap set in main() */
+			c->fd_tap = conf_tap_fd(optarg);
 			c->one_off = true;
 			*c->sock_path = 0;
 			break;
