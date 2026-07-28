@@ -344,8 +344,14 @@ int main(int argc, char **argv)
 
 	arch_avx2_exec(argv);
 
+	for (fd = 3; fd < 1024; fd++) {
+		if (fcntl(fd, F_GETFD) >= 0) {
+			if (c->leaked_fds_cnt < (int)ARRAY_SIZE(c->leaked_fds))
+				c->leaked_fds[c->leaked_fds_cnt++] = fd;
+		}
+	}
+
 	isolate_initial();
-	c->fd_tap = isolate_fds(argc, argv);
 
 	if ((devnull_fd = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0)
 		die_perror("Failed to open /dev/null");
@@ -390,6 +396,7 @@ int main(int argc, char **argv)
 	sock_probe_features(c);
 
 	conf(c, argc, argv);
+	isolate_fds(c);
 	trace_init(c->trace);
 
 	pasta_netns_quit_init(c);
