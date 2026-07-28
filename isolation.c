@@ -94,7 +94,6 @@
 #include "log.h"
 #include "isolation.h"
 #include "conf.h"
-#include "netlink.h"
 
 #define CAP_VERSION	_LINUX_CAPABILITY_VERSION_3
 #define CAP_WORDS	_LINUX_CAPABILITY_U32S_3
@@ -250,90 +249,22 @@ void isolate_initial(void)
 }
 
 /*
- * isolate_fds() - Close leaked files, keeping standard streams and active fds
+ * isolate_fds() - Close leaked files from the parent process
  * @c:		Execution context
  *
  * Should:
- *  - close all open files except for standard streams and active fds in c/global
+ *  - close all file descriptors that were open at startup, except for fd_tap
  */
 void isolate_fds(const struct ctx *c)
 {
-	int fds_cnt = 0;
-	int prev_fd;
-	int next_fd;
-	int fds[16];
-	int rc = 0;
+	int fd;
 	int i;
 
-	if (c->epollfd >= 0)
-		fds[fds_cnt++] = c->epollfd;
-	if (c->pidfile_fd >= 0)
-		fds[fds_cnt++] = c->pidfile_fd;
-	if (c->fd_tap >= 0)
-		fds[fds_cnt++] = c->fd_tap;
-	if (c->fd_tap_listen >= 0)
-		fds[fds_cnt++] = c->fd_tap_listen;
-	if (c->fd_control >= 0)
-		fds[fds_cnt++] = c->fd_control;
-	if (c->fd_control_listen >= 0)
-		fds[fds_cnt++] = c->fd_control_listen;
-	if (c->fd_repair >= 0)
-		fds[fds_cnt++] = c->fd_repair;
-	if (c->fd_repair_listen >= 0)
-		fds[fds_cnt++] = c->fd_repair_listen;
-	if (c->pasta_netns_fd >= 0)
-		fds[fds_cnt++] = c->pasta_netns_fd;
-	if (c->device_state_fd >= 0)
-		fds[fds_cnt++] = c->device_state_fd;
-	if (c->devnull_fd >= 0)
-		fds[fds_cnt++] = c->devnull_fd;
+	for (i = 0; i < c->leaked_fds_cnt; i++) {
+		fd = c->leaked_fds[i];
 
-	if (log_file >= 0)
-		fds[fds_cnt++] = log_file;
-	if (nl_sock >= 0)
-		fds[fds_cnt++] = nl_sock;
-	if (nl_sock_ns >= 0)
-		fds[fds_cnt++] = nl_sock_ns;
-
-	/* Keep standard streams */
-	prev_fd = STDERR_FILENO;
-
-	while (1) {
-		next_fd = -1;
-
-		/* Find the next-lowest fd to keep */
-		for (i = 0; i < fds_cnt; i++) {
-			if (fds[i] > prev_fd && (next_fd == -1 || fds[i] < next_fd))
-				next_fd = fds[i];
-		}
-
-		if (next_fd == -1)
-			break;
-
-		if (next_fd > prev_fd + 1) {
-			/* Close fds between two kept fds */
-			if (close_range(prev_fd + 1, next_fd - 1, CLOSE_RANGE_UNSHARE))
-				rc = -1;
-		}
-		prev_fd = next_fd;
-	}
-
-	/* Close all other fds */
-	if (close_range(prev_fd + 1, ~0U, CLOSE_RANGE_UNSHARE))
-		rc = -1;
-
-	if (rc) {
-		if (errno == ENOSYS || errno == EINVAL) {
-			/* This probably means close_range() or the
-			 * CLOSE_RANGE_UNSHARE flag is not supported by the
-			 * kernel.  Not much we can do here except carry on and
-			 * hope for the best.
-			 */
-			warn(
-"Can't use close_range() to ensure no files leaked by parent");
-		} else {
-			die_perror("Failed to close files leaked by parent");
-		}
+		if (fd != c->fd_tap)
+			close(fd);
 	}
 }
 

@@ -169,7 +169,8 @@ struct ip6_ctx {
  * @pcap:		Path for packet capture file
  * @pidfile:		Path to PID file, empty string if not configured
  * @pidfile_fd:		File descriptor for PID file, -1 if none
- * @devnull_fd:		File descriptor for /dev/null
+ * @leaked_fds:		Leaked file descriptors from parent process
+ * @leaked_fds_cnt:	Count of leaked file descriptors
  * @pasta_netns_fd:	File descriptor for network namespace in pasta mode
  * @no_netns_quit:	In pasta mode, don't exit if fs-bound namespace is gone
  * @netns_base:		Base name for fs-bound namespace, if any, in pasta mode
@@ -242,7 +243,8 @@ struct ctx {
 
 	char pidfile[PATH_MAX];
 	int pidfile_fd;
-	int devnull_fd;
+	int leaked_fds[1024];
+	int leaked_fds_cnt;
 
 	int one_off;
 
