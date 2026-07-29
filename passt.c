@@ -335,6 +335,7 @@ int main(int argc, char **argv)
 	struct epoll_event events[NUM_EPOLL_EVENTS];
 	int nfds, devnull_fd = -1, fd;
 	struct ctx *c = &passt_ctx;
+	struct initial_fd_snapshot ifds;
 	struct rlimit limit;
 	struct timespec now;
 	struct sigaction sa;
@@ -344,8 +345,9 @@ int main(int argc, char **argv)
 
 	arch_avx2_exec(argv);
 
+	snapshot_initial_fds(&ifds);
+
 	isolate_initial();
-	c->fd_tap = isolate_fds(argc, argv);
 
 	if ((devnull_fd = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0)
 		die_perror("Failed to open /dev/null");
@@ -390,6 +392,9 @@ int main(int argc, char **argv)
 	sock_probe_features(c);
 
 	conf(c, argc, argv);
+
+	isolate_fds(&ifds, c->fd_tap);
+	
 	trace_init(c->trace);
 
 	pasta_netns_quit_init(c);

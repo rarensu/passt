@@ -24,18 +24,12 @@
  * done anything we need to do with those resources, so we have
  * multiple stages of self-isolation.  In order these are:
  *
- * 1a. isolate_initial()
+ * 1. isolate_initial()
  * ====================
  *
  * Executed immediately after startup, drops capabilities we don't
  * need at any point during execution (or which we gain back when we
  * need by joining other namespaces).
- *
- * 1b. isolate_fds()
- * ================
- *
- * Executed immediately after isolate_initial().  Closes any leaked
- * files we might have inherited from the parent process.
  *
  * 2. isolate_user()
  * =================
@@ -44,14 +38,20 @@
  * operate in.  Sets our final UID & GID, and enters the correct user
  * namespace.
  *
- * 3. isolate_prefork()
+ * 3. isolate_fds()
+ * ================
+ *
+ * Executed after conf().  Closes any leaked
+ * files we might have inherited from the parent process.
+ *
+ * 4. isolate_prefork()
  * ====================
  *
  * Executed after all setup, but before daemonising (fork()ing into
  * the background).  Uses mount namespace and pivot_root() to remove
  * our access to the filesystem.
  *
- * 4. isolate_postfork()
+ * 5. isolate_postfork()
  * =====================
  *
  * Executed immediately after daemonizing, but before entering the
@@ -61,6 +61,7 @@
  * runtime operation.
  */
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -77,6 +78,7 @@
 #include <unistd.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -248,47 +250,96 @@ void isolate_initial(void)
 	drop_caps_ep_except(keep);
 }
 
-/*
- * isolate_fds() - Close leaked files, but not --fd, stdin, stdout, stderr
- * @argc:	Argument count
- * @argv:	Command line options, as we need to skip any file given via --fd
+/**
+ * snapshot_initial_fds() - Snapshot initial file descriptors inherited from parent
+ * other than standard streams (stdin, stdout, stderr)
+ * @ifds:	Snapshot struct of initial file descriptors to populate
+ */
+void snapshot_initial_fds(struct initial_fd_snapshot *ifds)
+{
+	struct dirent *entry;
+	size_t capacity = 16;
+	int max_fd = 1024;
+	struct rlimit rl;
+	long parsed_fd;
+	char *endptr;
+	int dir_fd;
+	DIR *dir;
+	int fd;
+
+	ifds->arr = NULL;
+	ifds->count = 0;
+
+	dir = opendir("/proc/self/fd");
+	if (dir) {
+		dir_fd = dirfd(dir);
+		ifds->arr = malloc(sizeof(int) * capacity);
+		if (!ifds->arr)
+			die_perror("Failed to allocate memory for inherited fds");
+
+		while ((entry = readdir(dir)) != NULL) {
+			if (entry->d_name[0] < '0' || entry->d_name[0] > '9')
+				continue;
+			parsed_fd = strtol(entry->d_name, &endptr, 10);
+			if (*endptr != '\0' || parsed_fd < 0 || parsed_fd > INT_MAX)
+				continue;
+			fd = (int)parsed_fd;
+			/* Ignore stdin/stdout/stderr and the opendir handle itself */
+			if (fd > STDERR_FILENO && fd != dir_fd) {
+				if (ifds->count >= capacity) {
+					size_t new_cap = capacity * 2;
+					int *new_arr = realloc(ifds->arr, sizeof(int) * new_cap);
+
+					if (!new_arr)
+						die_perror("Failed to reallocate memory for inherited fds");
+
+					ifds->arr = new_arr;
+					capacity = new_cap;
+				}
+				ifds->arr[ifds->count++] = fd;
+			}
+		}
+		closedir(dir);
+		return;
+	}
+
+	/* Fallback for environments without /proc (e.g. minimal chroots) */
+	if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
+		max_fd = (int)rl.rlim_cur;
+
+	ifds->arr = malloc(sizeof(int) * max_fd);
+	if (!ifds->arr)
+		die_perror("Failed to allocate memory for inherited fds fallback");
+
+	for (fd = STDERR_FILENO + 1; fd < max_fd; fd++) {
+		if (fcntl(fd, F_GETFD) >= 0)
+			ifds->arr[ifds->count++] = fd;
+	}
+}
+
+/**
+ * isolate_fds() - Close leaked files from the parent process
+ * @ifds:	Snapshot of initial file descriptors
+ * @keep_fd:	File descriptor to keep open, if any
  *
  * Should:
- *  - close all open files except for standard streams and the one from --fd
- *  - move the --fd descriptor out of the range 0-2
- *
- * Return: new fd number for descriptor from --fd, or -1 if not specified
+ *  - close all file descriptors that were open at startup, except for keep_fd
  */
-int isolate_fds(int argc, char **argv)
+void isolate_fds(struct initial_fd_snapshot *ifds, int keep_fd)
 {
-	int fd, close_from = STDERR_FILENO + 1;
+	size_t i;
 
-	fd = conf_tap_fd(argc, argv);
+	if (!ifds || !ifds->arr)
+		return;
 
-	if (fd >= 0) {
-		/* Move the passed fd to a more convenient location */
-		if (fd != close_from			&&
-		    (dup2(fd, close_from) != close_from	||
-		     close(fd)))
-			die_perror("Could not move --fd descriptor");
-		fd = close_from++;
+	for (i = 0; i < ifds->count; i++) {
+		if (ifds->arr[i] != keep_fd)
+			close(ifds->arr[i]);
 	}
 
-	if (close_range(close_from, ~0U, CLOSE_RANGE_UNSHARE)) {
-		if (errno == ENOSYS || errno == EINVAL) {
-			/* This probably means close_range() or the
-			 * CLOSE_RANGE_UNSHARE flag is not supported by the
-			 * kernel.  Not much we can do here except carry on and
-			 * hope for the best.
-			 */
-			warn(
-"Can't use close_range() to ensure no files leaked by parent");
-		} else {
-			die_perror("Failed to close files leaked by parent");
-		}
-	}
-
-	return fd;
+	free(ifds->arr);
+	ifds->arr = NULL;
+	ifds->count = 0;
 }
 
 /**
