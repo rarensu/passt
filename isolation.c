@@ -249,46 +249,23 @@ void isolate_initial(void)
 }
 
 /*
- * isolate_fds() - Close leaked files, but not --fd, stdin, stdout, stderr
- * @argc:	Argument count
- * @argv:	Command line options, as we need to skip any file given via --fd
+ * isolate_fds() - Close leaked files from the parent process
+ * @c:		Execution context
  *
  * Should:
- *  - close all open files except for standard streams and the one from --fd
- *  - move the --fd descriptor out of the range 0-2
- *
- * Return: new fd number for descriptor from --fd, or -1 if not specified
+ *  - close all file descriptors that were open at startup, except for fd_tap
  */
-int isolate_fds(int argc, char **argv)
+void isolate_fds(const struct ctx *c)
 {
-	int fd, close_from = STDERR_FILENO + 1;
+	int fd;
+	int i;
 
-	fd = conf_tap_fd(argc, argv);
+	for (i = 0; i < c->leaked_fds_cnt; i++) {
+		fd = c->leaked_fds[i];
 
-	if (fd >= 0) {
-		/* Move the passed fd to a more convenient location */
-		if (fd != close_from			&&
-		    (dup2(fd, close_from) != close_from	||
-		     close(fd)))
-			die_perror("Could not move --fd descriptor");
-		fd = close_from++;
+		if (fd != c->fd_tap)
+			close(fd);
 	}
-
-	if (close_range(close_from, ~0U, CLOSE_RANGE_UNSHARE)) {
-		if (errno == ENOSYS || errno == EINVAL) {
-			/* This probably means close_range() or the
-			 * CLOSE_RANGE_UNSHARE flag is not supported by the
-			 * kernel.  Not much we can do here except carry on and
-			 * hope for the best.
-			 */
-			warn(
-"Can't use close_range() to ensure no files leaked by parent");
-		} else {
-			die_perror("Failed to close files leaked by parent");
-		}
-	}
-
-	return fd;
 }
 
 /**

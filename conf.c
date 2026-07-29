@@ -444,7 +444,7 @@ static void conf_ip4_local(struct ip4_ctx *ip4)
 	ip4->our_tap_addr = ip4->guest_gw;
 
 	if (!ip4->prefix_len)
-		ip4->prefix_len = IP4_LL_PREFIX_LEN;
+	ip4->prefix_len = IP4_LL_PREFIX_LEN;
 
 	ip4->no_copy_addrs = ip4->no_copy_routes = true;
 }
@@ -1169,26 +1169,17 @@ static void conf_sock_listen(const struct ctx *c)
 }
 
 /**
- * conf_tap_fd() - Read tap fd as supplied by -F command line option
- * @argc:	Argument count
- * @argv:	Command line options
+ * conf_tap_fd() - Read and relocate tap fd as supplied by -F command line option
+ * @fdarg:	String containing fd
  *
  * Return: fd number from --fd option, or -1 if not supplied
  */
-int conf_tap_fd(int argc, char **argv)
+int conf_tap_fd(const char *fdarg)
 {
-	const struct option optfd[] = {	{ "fd", required_argument, NULL, 'F' },
-					{ 0 }, };
-	const char *fdarg = NULL, *p;
 	unsigned long val;
-	int name;
-
-	optind = 0;
-	do {
-		name = getopt_long(argc, argv, "-:F:", optfd, NULL);
-		if (name == 'F')
-			fdarg = optarg;
-	} while (name != -1);
+	const char *p;
+	int new_fd;
+	int fd;
 
 	if (!fdarg)
 		return -1;
@@ -1197,7 +1188,18 @@ int conf_tap_fd(int argc, char **argv)
 	if (!parse_unsigned(&p, 0, &val) || !parse_eoi(p) || val > INT_MAX)
 		die("Invalid --fd: %s", fdarg);
 
-	return val;
+	fd = (int)val;
+	if (fd >= 0 && fd < 3) {
+		new_fd = fcntl(fd, F_DUPFD, 3);
+
+		if (new_fd < 0)
+			die_perror("Could not relocate --fd descriptor");
+
+		close(fd);
+		fd = new_fd;
+	}
+
+	return fd;
 }
 
 /**
@@ -1625,7 +1627,7 @@ void conf(struct ctx *c, int argc, char **argv)
 			c->fd_control_listen = c->fd_control = -1;
 			break;
 		case 'F':
-			/* --fd was parsed early and c->fd_tap set in main() */
+			c->fd_tap = conf_tap_fd(optarg);
 			c->one_off = true;
 			*c->sock_path = 0;
 			break;
