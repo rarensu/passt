@@ -61,6 +61,7 @@
  * runtime operation.
  */
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -77,6 +78,7 @@
 #include <unistd.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -248,24 +250,88 @@ void isolate_initial(void)
 	drop_caps_ep_except(keep);
 }
 
-/*
- * isolate_fds() - Close leaked files from the parent process
- * @c:		Execution context
+/**
+ * collect_inherited_fds() - Snapshot file descriptors inherited from parent
+ * @list:	List of inherited file descriptors to populate
+ */
+void collect_inherited_fds(struct inherited_fds *list)
+{
+	struct dirent *entry;
+	size_t capacity = 16;
+	int max_fd = 1024;
+	struct rlimit rl;
+	int dir_fd;
+	DIR *dir;
+	int fd;
+
+	list->fds = NULL;
+	list->count = 0;
+
+	dir = opendir("/proc/self/fd");
+	if (dir) {
+		dir_fd = dirfd(dir);
+		list->fds = malloc(sizeof(int) * capacity);
+		if (!list->fds)
+			die_perror("Failed to allocate memory for inherited fds");
+
+		while ((entry = readdir(dir)) != NULL) {
+			if (entry->d_name[0] < '0' || entry->d_name[0] > '9')
+				continue;
+
+			fd = atoi(entry->d_name);
+			/* Ignore stdin/stdout/stderr and the opendir handle itself */
+			if (fd > STDERR_FILENO && fd != dir_fd) {
+				if (list->count >= capacity) {
+					capacity *= 2;
+					list->fds = realloc(list->fds,
+							    sizeof(int) * capacity);
+					if (!list->fds)
+						die_perror("Failed to reallocate memory for inherited fds");
+				}
+				list->fds[list->count++] = fd;
+			}
+		}
+		closedir(dir);
+		return;
+	}
+
+	/* Fallback for environments without /proc (e.g. minimal chroots) */
+	if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
+		max_fd = (int)rl.rlim_cur;
+
+	list->fds = malloc(sizeof(int) * max_fd);
+	if (!list->fds)
+		die_perror("Failed to allocate memory for inherited fds fallback");
+
+	for (fd = STDERR_FILENO + 1; fd < max_fd; fd++) {
+		if (fcntl(fd, F_GETFD) >= 0)
+			list->fds[list->count++] = fd;
+	}
+}
+
+/**
+ * cleanup_inherited_fds() - Close leaked files from the parent process
+ * @list:	List of inherited file descriptors
+ * @keep_fd:	File descriptor to keep open, if any
  *
  * Should:
- *  - close all file descriptors that were open at startup, except for fd_tap
+ *  - close all file descriptors that were open at startup, except for keep_fd
  */
-void isolate_fds(const struct ctx *c)
+void cleanup_inherited_fds(struct inherited_fds *list, int keep_fd)
 {
-	int fd;
-	int i;
+	size_t i;
 
-	for (i = 0; i < c->leaked_fds_cnt; i++) {
-		fd = c->leaked_fds[i];
+	if (!list || !list->fds)
+		return;
 
-		if (fd != c->fd_tap)
-			close(fd);
+	for (i = 0; i < list->count; i++) {
+		if (list->fds[i] != keep_fd)
+			close(list->fds[i]);
 	}
+
+	free(list->fds);
+	list->fds = NULL;
+	list->count = 0;
 }
 
 /**

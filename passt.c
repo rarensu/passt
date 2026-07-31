@@ -335,21 +335,17 @@ int main(int argc, char **argv)
 	struct epoll_event events[NUM_EPOLL_EVENTS];
 	int nfds, devnull_fd = -1, fd;
 	struct ctx *c = &passt_ctx;
-	struct rlimit limit;
+	struct inherited_fds list;
 	struct timespec now;
 	struct sigaction sa;
+	struct rlimit limit;
 
 	if (clock_gettime(CLOCK_MONOTONIC, &log_start))
 		die_perror("Failed to get CLOCK_MONOTONIC time");
 
 	arch_avx2_exec(argv);
 
-	for (fd = 3; fd < 1024; fd++) {
-		if (fcntl(fd, F_GETFD) >= 0) {
-			if (c->leaked_fds_cnt < (int)ARRAY_SIZE(c->leaked_fds))
-				c->leaked_fds[c->leaked_fds_cnt++] = fd;
-		}
-	}
+	collect_inherited_fds(&list);
 
 	isolate_initial();
 
@@ -396,7 +392,7 @@ int main(int argc, char **argv)
 	sock_probe_features(c);
 
 	conf(c, argc, argv);
-	isolate_fds(c);
+	cleanup_inherited_fds(&list, c->fd_tap);
 	trace_init(c->trace);
 
 	pasta_netns_quit_init(c);

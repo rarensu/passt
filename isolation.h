@@ -8,12 +8,19 @@
 #define ISOLATION_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <unistd.h>
 
 struct ctx;
 
+struct inherited_fds {
+	int *fds;
+	size_t count;
+};
+
 void isolate_initial(void);
-void isolate_fds(const struct ctx *c);
+void collect_inherited_fds(struct inherited_fds *list);
+void cleanup_inherited_fds(struct inherited_fds *list, int keep_fd);
 void isolate_user(const struct ctx *c, uid_t uid, gid_t gid, bool use_userns,
 		  const char *userns);
 int isolate_prefork(const struct ctx *c);
