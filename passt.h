@@ -121,6 +121,7 @@ struct ip4_ctx {
  * @dns:		DNS addresses for DHCPv6 and NDP
  * @dns_match:		Forward DNS query if sent to this address
  * @our_tap_ll:		Link-local IPv6 address for passt's use on tap
+ * @our_tap_addr:	Non-LL IPv6 address for passt's use on tap (if any)
  * @dns_host:		Use this DNS on the host for forwarding
  * @addr_out:		Optional source address for outbound traffic
  * @ifname_out:		Optional interface name to bind outbound sockets to
@@ -140,6 +141,7 @@ struct ip6_ctx {
 	struct in6_addr dns[MAXNS];
 	struct in6_addr dns_match;
 	struct in6_addr our_tap_ll;
+	struct in6_addr our_tap_addr;
 
 	/* PIF_HOST addresses */
 	struct in6_addr dns_host;
@@ -193,6 +195,7 @@ struct ip6_ctx {
  * @pasta_ifn:		Name of namespace interface for pasta
  * @pasta_ifi:		Index of namespace interface for pasta
  * @pasta_conf_ns:	Configure namespace after creating it
+ * @no_pidns:		Don't create a new PID namespace for spawned command
  * @fwd:		Forwarding tables
  * @fwd_pending:	Pending forward tables
  * @no_tcp:		Disable TCP operation
@@ -200,7 +203,6 @@ struct ip6_ctx {
  * @no_udp:		Disable UDP operation
  * @udp:		Context for UDP protocol handler
  * @no_icmp:		Disable ICMP operation
- * @icmp:		Context for ICMP protocol handler
  * @mtu:		MTU passed via DHCP/NDP
  * @no_dns:		Do not source/use DNS servers for any purpose
  * @no_dns_search:	Do not source/use domain search lists for any purpose
@@ -277,6 +279,7 @@ struct ctx {
 	char pasta_ifn[IF_NAMESIZE];
 	unsigned int pasta_ifi;
 	int pasta_conf_ns;
+	bool no_pidns;
 
 	struct fwd_table *fwd[PIF_NUM_TYPES];
 	struct fwd_table *fwd_pending[PIF_NUM_TYPES];
@@ -286,7 +289,6 @@ struct ctx {
 	int no_udp;
 	struct udp_ctx udp;
 	int no_icmp;
-	struct icmp_ctx icmp;
 
 	int no_dns;
 	int no_dns_search;

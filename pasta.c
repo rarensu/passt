@@ -46,7 +46,7 @@
 
 #include "util.h"
 #include "passt.h"
-#include "isolation.h"
+#include "pasta.h"
 #include "netlink.h"
 #include "log.h"
 #include "epoll_ctl.h"
@@ -194,14 +194,16 @@ static int pasta_spawn_cmd(void *arg)
 	if (prctl(PR_SET_PDEATHSIG, SIGKILL))
 		die_perror("Couldn't set PR_SET_PDEATHSIG");
 
-	/* We run in a detached PID and mount namespace: mount /proc over */
-	if (mount("", "/proc", "proc", 0, NULL))
+	a = (const struct pasta_spawn_cmd_arg *)arg;
+
+	/* We run in a detached mount namespace, and, unless --no-pidns was
+	 * given, in a detached PID namespace: mount /proc over
+	 */
+	if (!a->c->no_pidns && mount("", "/proc", "proc", 0, NULL))
 		warn_perror("Couldn't mount /proc");
 
 	if (write_file("/proc/sys/net/ipv4/ping_group_range", "0 0"))
 		warn("Cannot set ping_group_range, ICMP requests might fail");
-
-	a = (const struct pasta_spawn_cmd_arg *)arg;
 
 	conf_hostname_len = strlen(a->c->hostname);
 	if (conf_hostname_len > 0) {
@@ -234,14 +236,12 @@ static int pasta_spawn_cmd(void *arg)
 /**
  * pasta_start_ns() - Fork command in new namespace if target ns is not given
  * @c:		Execution context
- * @uid:	UID we're running as in the init namespace
- * @gid:	GID we're running as in the init namespace
  * @argc:	Number of arguments for spawned command
  * @argv:	Command to spawn and arguments
  */
-void pasta_start_ns(struct ctx *c, uid_t uid, gid_t gid,
-		    int argc, char *argv[])
+void pasta_start_ns(struct ctx *c, int argc, char *argv[])
 {
+	int flags = CLONE_NEWIPC | CLONE_NEWNET | CLONE_NEWUTS | CLONE_NEWNS;
 	char ns_fn_stack[NS_FN_STACK_SIZE]
 	__attribute__ ((aligned(__alignof__(max_align_t))));
 	struct pasta_spawn_cmd_arg arg = {
@@ -249,7 +249,6 @@ void pasta_start_ns(struct ctx *c, uid_t uid, gid_t gid,
 		.argv = argv,
 		.c = c,
 	};
-	char uidmap[BUFSIZ], gidmap[BUFSIZ];
 	char *sh_argv[] = { NULL, NULL };
 	char sh_arg0[PATH_MAX + 1];
 	sigset_t set;
@@ -257,19 +256,6 @@ void pasta_start_ns(struct ctx *c, uid_t uid, gid_t gid,
 	c->foreground = 1;
 	if (!c->debug)
 		c->quiet = 1;
-
-	/* Configure user and group mappings */
-	if (snprintf_check(uidmap, BUFSIZ, "0 %u 1", uid))
-		die_perror("Can't build uidmap");
-
-	if (snprintf_check(gidmap, BUFSIZ, "0 %u 1", gid))
-		die_perror("Can't build gidmap");
-
-	if (write_file("/proc/self/uid_map", uidmap) ||
-	    write_file("/proc/self/setgroups", "deny") ||
-	    write_file("/proc/self/gid_map", gidmap)) {
-		warn("Couldn't configure user mappings");
-	}
 
 	if (argc == 0) {
 		arg.exe = getenv("SHELL");
@@ -289,10 +275,11 @@ void pasta_start_ns(struct ctx *c, uid_t uid, gid_t gid,
 	sigaddset(&set, SIGUSR1);
 	sigprocmask(SIG_BLOCK, &set, NULL);
 
+	if (!c->no_pidns)
+		flags |= CLONE_NEWPID;
+
 	pasta_child_pid = do_clone(pasta_spawn_cmd, ns_fn_stack,
-				   sizeof(ns_fn_stack),
-				   CLONE_NEWIPC | CLONE_NEWPID | CLONE_NEWNET |
-				   CLONE_NEWUTS | CLONE_NEWNS  | SIGCHLD,
+				   sizeof(ns_fn_stack), flags | SIGCHLD,
 				   (void *)&arg);
 
 	if (pasta_child_pid == -1)

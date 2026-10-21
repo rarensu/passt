@@ -89,6 +89,7 @@
 #include <linux/seccomp.h>
 
 #include "util.h"
+#include "linux_dep.h"
 #include "seccomp.h"
 #include "passt.h"
 #include "log.h"
@@ -362,27 +363,41 @@ void isolate_user(const struct ctx *c, uid_t uid, gid_t gid, bool use_userns,
 			die_perror("Can't drop supplementary groups");
 	}
 
-	if (setgid(gid) != 0)
-		die_perror("Can't set GID to %u", gid);
+	/* If we're going to use a pre-existing userns (either named, or with
+	 * --netns-only the current one), we need to switch to drop root first.
+	 * However, if we're going to create our own userns, we need to delay
+	 * dropping root, because we don't our userns to be owned by nobody.
+	 */
+	if (*userns || !use_userns) {
+		if (setgid(gid) != 0)
+			die_perror("Can't set GID to %u", gid);
 
-	if (setuid(uid) != 0)
-		die_perror("Can't set UID to %u", uid);
+		if (setuid(uid) != 0)
+			die_perror("Can't set UID to %u", uid);
+	}
 
 	if (*userns) { /* If given a userns, join it */
-		int ufd;
+		enter_userns(userns);
+	} else if (use_userns) { /* Otherwise create our own */
+		pid_t holder_pid = create_userns(uid, gid);
+		char new_userns[PATH_MAX];
 
-		ufd = open(userns, O_RDONLY | O_CLOEXEC);
-		if (ufd < 0)
-			die_perror("Couldn't open user namespace %s", userns);
+		if (snprintf_check(new_userns, sizeof(new_userns),
+				   "/proc/%u/ns/user", holder_pid))
+			die_perror("Could not build userns path");
 
-		if (setns(ufd, CLONE_NEWUSER) != 0)
-			die_perror("Couldn't enter user namespace %s", userns);
+		enter_userns(new_userns);
 
-		close(ufd);
+		/* Now that we occupy the ns, we can kill the temporary holder */
+		if (kill(holder_pid, SIGKILL))
+			die_perror("Could not kill userns temporary holder");
 
-	} else if (use_userns) { /* Create and join a new userns */
-		if (unshare(CLONE_NEWUSER) != 0)
-			die_perror("Couldn't create user namespace");
+		/* Switch to our final uid/gid, which are mapped to 0 in the userns */
+		if (setgid(0) != 0)
+			die_perror("Can't set GID to 0 in userns");
+
+		if (setuid(0) != 0)
+			die_perror("Can't set UID to 0 in userns");
 	}
 
 	/* Joining a new userns gives us full capabilities; drop the

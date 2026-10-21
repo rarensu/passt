@@ -435,9 +435,16 @@ static unsigned int conf_ip4(unsigned int ifi, struct ip4_ctx *ip4)
  */
 static void conf_ip4_local(struct ip4_ctx *ip4)
 {
-	ip4->addr_seen = ip4->addr = IP4_LL_GUEST_ADDR;
-	ip4->our_tap_addr = ip4->guest_gw = IP4_LL_GUEST_GW;
-	ip4->prefix_len = IP4_LL_PREFIX_LEN;
+	if (IN4_IS_ADDR_UNSPECIFIED(&ip4->addr))
+		ip4->addr = IP4_LL_GUEST_ADDR;
+	ip4->addr_seen = ip4->addr;
+
+	if (IN4_IS_ADDR_UNSPECIFIED(&ip4->guest_gw))
+		ip4->guest_gw = IP4_LL_GUEST_GW;
+	ip4->our_tap_addr = ip4->guest_gw;
+
+	if (!ip4->prefix_len)
+		ip4->prefix_len = IP4_LL_PREFIX_LEN;
 
 	ip4->no_copy_addrs = ip4->no_copy_routes = true;
 }
@@ -483,6 +490,8 @@ static unsigned int conf_ip6(unsigned int ifi, struct ip6_ctx *ip6)
 
 	if (IN6_IS_ADDR_LINKLOCAL(&ip6->guest_gw))
 		ip6->our_tap_ll = ip6->guest_gw;
+	else
+		ip6->our_tap_addr = ip6->guest_gw;
 
 	if (IN6_IS_ADDR_UNSPECIFIED(&ip6->addr) ||
 	    IN6_IS_ADDR_UNSPECIFIED(&ip6->our_tap_ll))
@@ -497,7 +506,15 @@ static unsigned int conf_ip6(unsigned int ifi, struct ip6_ctx *ip6)
  */
 static void conf_ip6_local(struct ip6_ctx *ip6)
 {
-	ip6->our_tap_ll = ip6->guest_gw = IP6_LL_GUEST_GW;
+	if (IN6_IS_ADDR_UNSPECIFIED(&ip6->guest_gw))
+		ip6->guest_gw = IP6_LL_GUEST_GW;
+
+	if (IN6_IS_ADDR_LINKLOCAL(&ip6->guest_gw)) {
+		ip6->our_tap_ll = ip6->guest_gw;
+	} else {
+		ip6->our_tap_addr = ip6->guest_gw;
+		ip6->our_tap_ll = IP6_LL_GUEST_GW;
+	}
 
 	ip6->no_copy_addrs = ip6->no_copy_routes = true;
 }
@@ -725,6 +742,7 @@ pasta_opts:
 		"    implied if PATH or NAME are given without --userns\n"
 		"  --no-netns-quit	Don't quit if filesystem-bound target\n"
 		"  			network namespace is deleted\n"
+		"  --no-pidns		Don't spawn command in a new PID namespace\n"
 		"  --config-net		Configure tap interface in namespace\n"
 		"  --no-copy-routes	DEPRECATED:\n"
 		"			Don't copy all routes to namespace\n"
@@ -1102,39 +1120,6 @@ static void conf_open_files(struct ctx *c)
 }
 
 /**
- * parse_mac() - Parse a MAC address from a string
- * @mac:	Binary MAC address, initialised on success
- * @str:	String to parse
- *
- * Parses @str as an Ethernet MAC address stored in @mac on success.  Exits on
- * failure.
- */
-static void parse_mac(unsigned char mac[ETH_ALEN], const char *str)
-{
-	size_t i;
-
-	if (strlen(str) != (ETH_ALEN * 3 - 1))
-		goto fail;
-
-	for (i = 0; i < ETH_ALEN; i++) {
-		const char *octet = str + 3 * i;
-		unsigned long b;
-		char *end;
-
-		errno = 0;
-		b = strtoul(octet, &end, 16);
-		if (b > UCHAR_MAX || errno || end != octet + 2 ||
-		    *end != ((i == ETH_ALEN - 1) ? '\0' : ':'))
-			goto fail;
-		mac[i] = b;
-	}
-	return;
-
-fail:
-	die("Invalid MAC address: %s", str);
-}
-
-/**
  * conf_sock_listen() - Start listening for connections on configuration socket
  * @c:		Execution context
  */
@@ -1196,7 +1181,7 @@ int conf_tap_fd(int argc, char **argv)
  */
 int conf_pass_fds(int argc, char **argv, int *fds, int max_fds)
 {
-	const struct option opt[] = { { "pass-fds", required_argument, NULL, 33 },
+	const struct option opt[] = { { "pass-fds", required_argument, NULL, 34 },
 				      { 0 }, };
 	const char *fdsarg = NULL;
 	int name, fds_cnt = 0;
@@ -1207,7 +1192,7 @@ int conf_pass_fds(int argc, char **argv, int *fds, int max_fds)
 	optind = 0;
 	do {
 		name = getopt_long(argc, argv, "-:", opt, NULL);
-		if (name == 33)
+		if (name == 34)
 			fdsarg = optarg;
 	} while (name != -1);
 	opterr = old_opterr;
@@ -1398,7 +1383,8 @@ void conf(struct ctx *c, int argc, char **argv)
 		{"stats", required_argument,		NULL,		31 },
 		{"conf-path",	required_argument,	NULL,		'c' },
 		{"chroot-fallback", no_argument,	NULL, 		32 },
-		{"pass-fds",	required_argument,	NULL,		33 },
+		{"no-pidns",	no_argument,		NULL,		33 },
+		{"pass-fds",	required_argument,	NULL,		34 },
 		{ 0 },
 	};
 	const char *optstring = "+dqfel:hs:c:F:I:p:P:m:a:n:M:g:i:o:D:S:H:461t:u:T:U:";
@@ -1462,7 +1448,10 @@ void conf(struct ctx *c, int argc, char **argv)
 			if (c->mode != MODE_PASTA)
 				die("--ns-mac-addr is for pasta mode only");
 
-			parse_mac(c->guest_mac, optarg);
+			p = optarg;
+			if (!parse_mac(&p, c->guest_mac) ||
+			    !parse_eoi(p))
+				die("Invalid MAC address: %s", optarg);
 			break;
 		case 5:
 			if (c->mode != MODE_PASTA)
@@ -1642,7 +1631,14 @@ void conf(struct ctx *c, int argc, char **argv)
 			break;
 		case 33:
 			if (c->mode != MODE_PASTA)
-				die("--pass-fds is for pasta mode only");
+				die("--no-pidns is for pasta mode only");
+
+			c->no_pidns = true;
+			break;
+    case 34:
+			if (c->mode != MODE_PASTA)
+ 				die("--pass-fds is for pasta mode only");
+
 			break;
 		case 'd':
 			c->debug = 1;
@@ -1733,7 +1729,10 @@ void conf(struct ctx *c, int argc, char **argv)
 			opt_n = c->ip4.prefix_len + 96;
 			break;
 		case 'M':
-			parse_mac(c->our_tap_mac, optarg);
+			p = optarg;
+			if (!parse_mac(&p, c->our_tap_mac) ||
+			    !parse_eoi(p))
+				die("Invalid MAC address: %s", optarg);
 			break;
 		case 'g':
 			if (inet_pton(AF_INET6, optarg, &c->ip6.guest_gw) &&
@@ -2003,6 +2002,9 @@ void conf(struct ctx *c, int argc, char **argv)
 	else if (optind != argc)
 		die("Extra non-option argument: %s", argv[optind]);
 
+	if (c->no_pidns && *netns)
+		die("--no-pidns is incompatible with PID or --netns");
+
 	conf_open_files(c);	/* Before any possible setuid() / setgid() */
 
 	isolate_user(c, uid, gid, !netns_only, userns);
@@ -2017,8 +2019,7 @@ void conf(struct ctx *c, int argc, char **argv)
 		if (*netns) {
 			pasta_open_ns(c, netns);
 		} else {
-			pasta_start_ns(c, uid, gid,
-				       argc - optind, argv + optind);
+			pasta_start_ns(c, argc - optind, argv + optind);
 		}
 	}
 

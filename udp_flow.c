@@ -247,11 +247,8 @@ flow_sidx_t udp_flow_from_sock(const struct ctx *c, uint8_t pif,
 	ini = flow_initiate_sa(flow, pif, s_in, dst, port);
 
 	if (!inany_is_unicast(&ini->eaddr) ||
+	    inany_is_unspecified(&ini->oaddr) ||
 	    ini->eport == 0 || ini->oport == 0) {
-		/* In principle ini->oddr also must be specified, but when we've
-		 * been initiated from a socket bound to 0.0.0.0 or ::, we don't
-		 * know our address, so we have to leave it unpopulated.
-		 */
 		flow_err_ratelimit(flow, now,
 				   "Invalid endpoint on UDP recvfrom()");
 		flow_alloc_cancel(flow);
@@ -270,6 +267,7 @@ flow_sidx_t udp_flow_from_sock(const struct ctx *c, uint8_t pif,
  * @daddr:	Destination address guest side
  * @srcport:	Source port on guest side
  * @dstport:	Destination port on guest side
+ * @now:	Current timestamp
  *
  * Return: sidx for the destination side of the flow for this packet, or
  *         FLOW_SIDX_NONE if we couldn't find or create a flow.
