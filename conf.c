@@ -752,7 +752,7 @@ pasta_opts:
 		"  --no-splice		Disable inbound socket splicing\n"
 		"  --splice-only	Only enable loopback forwarding\n"
 		"  --pass-fd FD		File descriptor to pass to the spawned\n"
-		"			command (up to 1024)\n");
+		"			command\n");
 
 	passt_exit(status);
 }
@@ -1205,21 +1205,14 @@ int conf_pass_fds(struct ctx *c, int argc, char **argv, int *fds, int max_fds)
 			if (fds_cnt >= max_fds)
 				die("Too many file descriptors in --pass-fd");
 
-			if (fds)
-				fds[fds_cnt] = (int)val;
-			fds_cnt++;
+			fds[fds_cnt++] = (int)val;
 		}
 	} while (name != -1);
 	opterr = old_opterr;
 
-	if (!opt_given) {
-		if (c)
-			c->pasta_passed_fds = 0;
+	c->pasta_passed_fds = opt_given ? fds_cnt : 0;
+	if (!opt_given)
 		return -1;
-	}
-
-	if (c)
-		c->pasta_passed_fds = fds_cnt;
 
 	return fds_cnt;
 }
