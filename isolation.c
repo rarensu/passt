@@ -309,7 +309,7 @@ void isolate_fds(struct ctx *c, int argc, char **argv)
 		prev_fd = next_fd;
 		kept_fds++;
 	}
-	
+
 	/* Close all other fds */
 	if (close_range(prev_fd + 1, ~0U, CLOSE_RANGE_UNSHARE))
 		rc = -1;
