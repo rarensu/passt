@@ -767,9 +767,10 @@ Do not create a tap device in the namespace. In this mode, \fIpasta\fR only
 forwards loopback traffic between namespaces.
 
 .TP
-.BR \-\-pass\-fds " " \fIfds\fR
-Pass a comma-separated list of file descriptors to the spawned command.
-These file descriptors will be kept open.
+.BR \-\-pass\-fd " " \fIfd\fR
+Pass file descriptor \fIfd\fR to the spawned command.  These file descriptors
+will be kept open.  This option can be specified multiple times (up to 1024),
+and may only be used when \fBpasta\fR spawns a command.
 
 .SH EXAMPLES
 

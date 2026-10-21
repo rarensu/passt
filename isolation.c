@@ -250,46 +250,47 @@ void isolate_initial(void)
 }
 
 /*
- * isolate_fds() - Close leaked files, but not --fd, --pass-fds, standard streams
+ * isolate_fds() - Close leaked files, but not --fd, --pass-fd, standard streams
+ * @c:		Execution context
  * @argc:	Argument count
  * @argv:	Command line options
  *
  * Should:
- *  - close all open files except for standard streams, --fd, and --pass-fds
+ *  - close all open files except for standard streams, --fd, and --pass-fd
  *  - move the --fd descriptor out of the range 0-2
- *
- * Return: new fd number for descriptor from --fd, or -1 if not specified
  */
-int isolate_fds(int argc, char **argv)
+void isolate_fds(struct ctx *c, int argc, char **argv)
 {
 	int fds[PASS_FDS_MAX + 1];
 	int fds_cnt = 0;
 	int prev_fd;
 	int next_fd;
-	int tap_fd;
 	int rc = 0;
 	int i;
 
-	tap_fd = conf_tap_fd(argc, argv);
-	if (tap_fd >= 0 && tap_fd < 3) {
+	c->fd_tap = conf_tap_fd(argc, argv);
+	if (c->fd_tap >= 0 && c->fd_tap < 3) {
 		/* Move the tap fd to a safer location */
-		int new_fd = fcntl(tap_fd, F_DUPFD, STDERR_FILENO + 1);
+		int new_fd = fcntl(c->fd_tap, F_DUPFD, STDERR_FILENO + 1);
 
 		if (new_fd < 0)
 			die_perror("Could not relocate --fd descriptor");
 
-		close(tap_fd);
-		tap_fd = new_fd;
+		close(c->fd_tap);
+		c->fd_tap = new_fd;
 	}
 
-	if (tap_fd >= 0)
+	if (c->fd_tap >= 0)
 		/* Keep the tap fd */
-		fds[fds_cnt++] = tap_fd;
+		fds[fds_cnt++] = c->fd_tap;
 
-	rc = conf_pass_fds(argc, argv, fds + fds_cnt, PASS_FDS_MAX);
+	rc = conf_pass_fds(c, argc, argv, fds + fds_cnt, PASS_FDS_MAX);
 	if (rc > 0)
 		/* Keep the pass-fds */
 		fds_cnt += rc;
+
+	if (c->pasta_passed_fds)
+		debug("Keeping %i passed file descriptors", c->pasta_passed_fds);
 
 	rc = 0;
 
@@ -333,8 +334,6 @@ int isolate_fds(int argc, char **argv)
 			die_perror("Failed to close files leaked by parent");
 		}
 	}
-
-	return tap_fd;
 }
 
 /**
