@@ -1156,7 +1156,7 @@ int conf_fds(int argc, char **argv, int *fds)
 	int name;
 	int c;
 
-	// Tap fd is always first
+	/* Tap fd is always first */
 	fds[0] = -1;
 	c = 1;
 
@@ -1189,6 +1189,7 @@ int conf_fds(int argc, char **argv, int *fds)
 		}
 	} while (name != -1);
 	opterr = old_opterr;
+	optind = 0;
 	return c;
 }
 
