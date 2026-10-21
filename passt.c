@@ -344,8 +344,10 @@ int main(int argc, char **argv)
 
 	arch_avx2_exec(argv);
 
+	c->mode = conf_mode(argc, argv);
+
 	isolate_initial();
-	c->fd_tap = isolate_fds(argc, argv);
+	isolate_fds(c, argc, argv);
 
 	if ((devnull_fd = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0)
 		die_perror("Failed to open /dev/null");
@@ -361,8 +363,6 @@ int main(int argc, char **argv)
 	sa.sa_handler = exit_handler;
 	sigaction(SIGTERM, &sa, NULL);
 	sigaction(SIGQUIT, &sa, NULL);
-
-	c->mode = conf_mode(argc, argv);
 
 	if (c->mode == MODE_PASTA) {
 		sa.sa_handler = pasta_child_handler;

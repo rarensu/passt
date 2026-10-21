@@ -751,8 +751,8 @@ pasta_opts:
 		"  --ns-mac-addr ADDR	Set MAC address on tap interface\n"
 		"  --no-splice		Disable inbound socket splicing\n"
 		"  --splice-only	Only enable loopback forwarding\n"
-		"  --pass-fds FDS	Comma-separated list of fds to pass to\n"
-		"			the spawned command\n");
+		"  --pass-fd FD		File descriptor to pass to the spawned\n"
+		"			command (up to 1024)\n");
 
 	passt_exit(status);
 }
@@ -1171,7 +1171,8 @@ int conf_tap_fd(int argc, char **argv)
 }
 
 /**
- * conf_pass_fds() - Read fds as supplied by --pass-fds command line option
+ * conf_pass_fds() - Read fds as supplied by --pass-fd command line option
+ * @c:		Execution context
  * @argc:	Argument count
  * @argv:	Command line options
  * @fds:	Array where we store the parsed fds
@@ -1179,12 +1180,12 @@ int conf_tap_fd(int argc, char **argv)
  *
  * Return: number of parsed fds, or -1 if option not specified
  */
-int conf_pass_fds(int argc, char **argv, int *fds, int max_fds)
+int conf_pass_fds(struct ctx *c, int argc, char **argv, int *fds, int max_fds)
 {
-	const struct option opt[] = { { "pass-fds", required_argument, NULL, 34 },
+	const struct option opt[] = { { "pass-fd", required_argument, NULL, 34 },
 				      { 0 }, };
-	const char *fdsarg = NULL;
 	int name, fds_cnt = 0;
+	bool opt_given = false;
 	int old_opterr;
 
 	old_opterr = opterr;
@@ -1192,45 +1193,33 @@ int conf_pass_fds(int argc, char **argv, int *fds, int max_fds)
 	optind = 0;
 	do {
 		name = getopt_long(argc, argv, "-:", opt, NULL);
-		if (name == 34)
-			fdsarg = optarg;
+		if (name == 34) {
+			const char *p = optarg;
+			unsigned long val;
+
+			opt_given = true;
+			if (!parse_unsigned(&p, 0, &val) || !parse_eoi(p) ||
+			    val > INT_MAX)
+				die("Invalid --pass-fd: %s", optarg);
+
+			if (fds_cnt >= max_fds)
+				die("Too many file descriptors in --pass-fd");
+
+			if (fds)
+				fds[fds_cnt] = (int)val;
+			fds_cnt++;
+		}
 	} while (name != -1);
 	opterr = old_opterr;
 
-	if (!fdsarg)
+	if (!opt_given) {
+		if (c)
+			c->pasta_passed_fds = 0;
 		return -1;
-
-	const char *orig_fdsarg = fdsarg;
-
-	while (*fdsarg) {
-		unsigned long val;
-		char *endptr;
-
-		val = strtoul(fdsarg, &endptr, 10);
-		if (fdsarg == endptr) {
-			die("Invalid character in --pass-fds option '%s' (near '%s')",
-			    orig_fdsarg, fdsarg);
-		}
-
-		if (val > INT_MAX) {
-			die("Invalid file descriptor in --pass-fds option '%s' (near '%s')",
-			    orig_fdsarg, fdsarg);
-		}
-
-		if (fds_cnt >= max_fds)
-			die("Too many file descriptors in --pass-fds");
-
-		fds[fds_cnt++] = (int)val;
-
-		if (*endptr == ',')
-			fdsarg = endptr + 1;
-		else if (*endptr == '\0')
-			fdsarg = endptr;
-		else {
-			die("Invalid character in --pass-fds option '%s' (near '%s')",
-			    orig_fdsarg, endptr);
-		}
 	}
+
+	if (c)
+		c->pasta_passed_fds = fds_cnt;
 
 	return fds_cnt;
 }
@@ -1384,7 +1373,7 @@ void conf(struct ctx *c, int argc, char **argv)
 		{"conf-path",	required_argument,	NULL,		'c' },
 		{"chroot-fallback", no_argument,	NULL, 		32 },
 		{"no-pidns",	no_argument,		NULL,		33 },
-		{"pass-fds",	required_argument,	NULL,		34 },
+		{"pass-fd",	required_argument,	NULL,		34 },
 		{ 0 },
 	};
 	const char *optstring = "+dqfel:hs:c:F:I:p:P:m:a:n:M:g:i:o:D:S:H:461t:u:T:U:";
@@ -1635,9 +1624,9 @@ void conf(struct ctx *c, int argc, char **argv)
 
 			c->no_pidns = true;
 			break;
-    case 34:
+		case 34:
 			if (c->mode != MODE_PASTA)
- 				die("--pass-fds is for pasta mode only");
+				die("--pass-fd is for pasta mode only");
 
 			break;
 		case 'd':
@@ -2001,6 +1990,9 @@ void conf(struct ctx *c, int argc, char **argv)
 		conf_pasta_ns(&netns_only, userns, netns, optind, argc, argv);
 	else if (optind != argc)
 		die("Extra non-option argument: %s", argv[optind]);
+
+	if (c->pasta_passed_fds && *netns)
+		die("--pass-fd can only be used when spawning a command");
 
 	if (c->no_pidns && *netns)
 		die("--no-pidns is incompatible with PID or --netns");

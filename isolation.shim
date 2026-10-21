@@ -33,12 +33,11 @@ void isolate_initial(void)
 
 /**
  * isolate_fds() - Preserve an optional descriptor supplied through --fd
+ * @c:		Execution context
  * @argc:	Argument count
  * @argv:	Command line options, used to locate any descriptor from --fd
- *
- * Return: descriptor supplied through --fd, moved to fd 3, or -1
  */
-int isolate_fds(int argc, char **argv)
+void isolate_fds(struct ctx *c, int argc, char **argv)
 {
 	int fd, target = STDERR_FILENO + 1;
 
@@ -52,7 +51,10 @@ int isolate_fds(int argc, char **argv)
 		fd = target;
 	}
 
-	return fd;
+	c->fd_tap = fd;
+
+	if (conf_pass_fds(c, argc, argv, NULL, PASS_FDS_MAX) > 0 && c->pasta_passed_fds)
+		debug("Keeping %i passed file descriptors", c->pasta_passed_fds);
 }
 
 /**
