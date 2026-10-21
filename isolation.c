@@ -338,6 +338,79 @@ int isolate_fds(int argc, char **argv)
 }
 
 /**
+ * enter_userns() - Enter a named user namespace
+ * @userns:	userns path to enter
+ */
+static void enter_userns(const char *userns)
+{
+	int ufd;
+
+	ufd = open(userns, O_RDONLY | O_CLOEXEC);
+	if (ufd < 0)
+		die_perror("Couldn't open user namespace %s", userns);
+
+	if (setns(ufd, CLONE_NEWUSER) != 0)
+		die_perror("Couldn't enter user namespace %s", userns);
+
+	close(ufd);
+}
+
+/**
+ * userns_holder() - Hold a clone()ed namespace open until killed
+ * @arg:	Unused
+ *
+ * Return: this function never returns
+ */
+static int userns_holder(void *arg)
+{
+	sigset_t set;
+
+	(void)arg;
+	/* If the parent dies with an error, so should we */
+	if (prctl(PR_SET_PDEATHSIG, SIGKILL))
+		die_perror("Couldn't set PR_SET_PDEATHSIG");
+
+	/* Wait until the parent kills us */
+	sigemptyset(&set);
+	sigwaitinfo(&set, NULL);
+
+	die("userns holder process wasn't killed");
+}
+
+/**
+ * create_userns() - Create a new userns to isolate ourselves
+ * @uid:	Parent UID to map to 0 within the namespace
+ * @gid:	Parent GID to map to 0 within the namespace
+ *
+ * Return: PID of the process holding the new userns
+ *
+ * Several things combine to make this more complicated than you'd expect.
+ * - We want to make the userns before we setuid() to nobody (or the userns
+ *   would be owned by nobody)
+ * - We still want to setuid() _after_ we enter the userns, which means
+ *   (parent-)nobody must be mapped within the userns
+ * - It's only possible to map the current user from within a userns, so we must
+ *   create that mapping from the parent
+ * - Therefore we can't create the userns with unshare(2), but must create it
+ *   by clone(2)ing a temporary holder process.
+ */
+static pid_t create_userns(uid_t uid, gid_t gid)
+{
+	char ns_fn_stack[NS_FN_STACK_SIZE]
+	__attribute__ ((aligned(__alignof__(max_align_t))));
+	pid_t pid;
+
+	pid = do_clone(userns_holder, ns_fn_stack, sizeof(ns_fn_stack),
+		       CLONE_NEWUSER | SIGCHLD, NULL);
+	if (pid < 0)
+		die_perror("Unable to create user namespace");
+
+	make_ugid_map(pid, uid, gid);
+
+	return pid;
+}
+
+/**
  * isolate_user() - Switch to final UID/GID and move into userns
  * @c:		Execution context
  * @uid:	User ID to run as (in original userns)
