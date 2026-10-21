@@ -262,13 +262,17 @@ void isolate_initial(void)
 void isolate_fds(struct ctx *c, int argc, char **argv)
 {
 	int fds[PASS_FDS_MAX + 1];
+	int kept_pass_fds = 0;
+	struct fd_opts opts;
 	int fds_cnt = 0;
 	int prev_fd;
 	int next_fd;
 	int rc = 0;
 	int i;
 
-	c->fd_tap = conf_tap_fd(argc, argv);
+	conf_fds(argc, argv, &opts);
+
+	c->fd_tap = opts.tap;
 	if (c->fd_tap >= 0 && c->fd_tap < 3) {
 		/* Move the tap fd to a safer location */
 		int new_fd = fcntl(c->fd_tap, F_DUPFD, STDERR_FILENO + 1);
@@ -284,13 +288,27 @@ void isolate_fds(struct ctx *c, int argc, char **argv)
 		/* Keep the tap fd */
 		fds[fds_cnt++] = c->fd_tap;
 
-	rc = conf_pass_fds(c, argc, argv, fds + fds_cnt, PASS_FDS_MAX);
-	if (rc > 0)
-		/* Keep the pass-fds */
-		fds_cnt += rc;
+	for (i = 0; i < opts.pass_fds_c; i++) {
+		int fd = opts.pass_fds_v[i];
+		int j;
 
-	if (c->pasta_passed_fds)
-		debug("Keeping %i passed file descriptors", c->pasta_passed_fds);
+		if (fd <= STDERR_FILENO || fd == c->fd_tap)
+			continue;
+
+		for (j = 0; j < fds_cnt; j++) {
+			if (fds[j] == fd)
+				break;
+		}
+		if (j < fds_cnt)
+			continue;
+
+		fds[fds_cnt++] = fd;
+		kept_pass_fds++;
+	}
+
+	c->pasta_pass_fd = opts.pass_fds_c > 0;
+	if (c->pasta_pass_fd)
+		debug("Keeping %i passed file descriptors", kept_pass_fds);
 
 	rc = 0;
 

@@ -39,10 +39,15 @@ void isolate_initial(void)
  */
 void isolate_fds(struct ctx *c, int argc, char **argv)
 {
-	int fds[PASS_FDS_MAX];
-	int fd, target = STDERR_FILENO + 1;
+	int target = STDERR_FILENO + 1;
+	int kept_pass_fds = 0;
+	struct fd_opts opts;
+	int fd;
+	int i;
 
-	fd = conf_tap_fd(argc, argv);
+	conf_fds(argc, argv, &opts);
+
+	fd = opts.tap;
 
 	if (fd >= 0) {
 		if (fd != target &&
@@ -54,8 +59,16 @@ void isolate_fds(struct ctx *c, int argc, char **argv)
 
 	c->fd_tap = fd;
 
-	if (conf_pass_fds(c, argc, argv, fds, PASS_FDS_MAX) > 0 && c->pasta_passed_fds)
-		debug("Keeping %i passed file descriptors", c->pasta_passed_fds);
+	for (i = 0; i < opts.pass_fds_c; i++) {
+		int pfd = opts.pass_fds_v[i];
+
+		if (pfd > STDERR_FILENO && pfd != c->fd_tap)
+			kept_pass_fds++;
+	}
+
+	c->pasta_pass_fd = opts.pass_fds_c > 0;
+	if (c->pasta_pass_fd)
+		debug("Keeping %i passed file descriptors", kept_pass_fds);
 }
 
 /**
