@@ -261,54 +261,28 @@ void isolate_initial(void)
  */
 void isolate_fds(struct ctx *c, int argc, char **argv)
 {
-	int fds[PASS_FDS_MAX + 1];
-	int kept_pass_fds = 0;
-	struct fd_opts opts;
-	int fds_cnt = 0;
+	int fds[PASS_FDS_MAX];
+	int kept_fds = 0;
+	int fds_cnt;
 	int prev_fd;
 	int next_fd;
 	int rc = 0;
 	int i;
 
-	conf_fds(argc, argv, &opts);
+	fds_cnt = conf_fds(argc, argv, fds);
+	c->pasta_pass_fd = fds_cnt > 1;
 
-	c->fd_tap = opts.tap;
-	if (c->fd_tap >= 0 && c->fd_tap < 3) {
+	if (fds[0] >= 0 && fds[0] < 3) {
 		/* Move the tap fd to a safer location */
-		int new_fd = fcntl(c->fd_tap, F_DUPFD, STDERR_FILENO + 1);
+		int new_fd = fcntl(fds[0], F_DUPFD, STDERR_FILENO + 1);
 
 		if (new_fd < 0)
 			die_perror("Could not relocate --fd descriptor");
 
-		close(c->fd_tap);
-		c->fd_tap = new_fd;
+		close(fds[0]);
+		fds[0] = new_fd;
 	}
-
-	if (c->fd_tap >= 0)
-		/* Keep the tap fd */
-		fds[fds_cnt++] = c->fd_tap;
-
-	for (i = 0; i < opts.pass_fds_c; i++) {
-		int fd = opts.pass_fds_v[i];
-		int j;
-
-		if (fd <= STDERR_FILENO || fd == c->fd_tap)
-			continue;
-
-		for (j = 0; j < fds_cnt; j++) {
-			if (fds[j] == fd)
-				break;
-		}
-		if (j < fds_cnt)
-			continue;
-
-		fds[fds_cnt++] = fd;
-		kept_pass_fds++;
-	}
-
-	c->pasta_pass_fd = opts.pass_fds_c > 0;
-	if (c->pasta_pass_fd)
-		debug("Keeping %i passed file descriptors", kept_pass_fds);
+	c->fd_tap = fds[0];
 
 	rc = 0;
 
@@ -333,6 +307,7 @@ void isolate_fds(struct ctx *c, int argc, char **argv)
 				rc = -1;
 		}
 		prev_fd = next_fd;
+		kept_fds++;
 	}
 	
 	/* Close all other fds */
@@ -352,6 +327,8 @@ void isolate_fds(struct ctx *c, int argc, char **argv)
 			die_perror("Failed to close files leaked by parent");
 		}
 	}
+	if (c->pasta_pass_fd)
+		debug("Kept %i user-passed file descriptors", c->fd_tap < 0 ? kept_fds : kept_fds - 1);
 }
 
 /**

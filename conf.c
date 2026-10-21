@@ -1142,9 +1142,10 @@ static void conf_sock_listen(const struct ctx *c)
  * conf_fds() - Read fds as supplied by -F/--fd and --pass-fd options
  * @argc:	Argument count
  * @argv:	Command line options
- * @fds:	fd options structure to populate
+ * @fds:	fd array to populate
+ * Return: number of fds populated
  */
-void conf_fds(int argc, char **argv, struct fd_opts *fds)
+int conf_fds(int argc, char **argv, int *fds)
 {
 	const struct option opt[] = {
 		{ "fd",      required_argument, NULL, 'F' },
@@ -1153,9 +1154,11 @@ void conf_fds(int argc, char **argv, struct fd_opts *fds)
 	};
 	int old_opterr;
 	int name;
+	int c;
 
-	fds->tap = -1;
-	fds->pass_fds_c = 0;
+	// Tap fd is always first
+	fds[0] = -1;
+	c = 1;
 
 	old_opterr = opterr;
 	opterr = 0;
@@ -1170,7 +1173,7 @@ void conf_fds(int argc, char **argv, struct fd_opts *fds)
 			    val > INT_MAX)
 				die("Invalid --fd: %s", optarg);
 
-			fds->tap = (int)val;
+			fds[0] = (int)val;
 		} else if (name == 34) {
 			const char *p = optarg;
 			unsigned long val;
@@ -1179,13 +1182,14 @@ void conf_fds(int argc, char **argv, struct fd_opts *fds)
 			    val > INT_MAX)
 				die("Invalid --pass-fd: %s", optarg);
 
-			if (fds->pass_fds_c >= PASS_FDS_MAX)
+			if (c >= PASS_FDS_MAX)
 				die("Too many file descriptors in --pass-fd");
 
-			fds->pass_fds_v[fds->pass_fds_c++] = (int)val;
+			fds[c++] = (int)val;
 		}
 	} while (name != -1);
 	opterr = old_opterr;
+	return c;
 }
 
 /**
