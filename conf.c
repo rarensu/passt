@@ -1139,82 +1139,53 @@ static void conf_sock_listen(const struct ctx *c)
 }
 
 /**
- * conf_tap_fd() - Read tap fd as supplied by -F command line option
+ * conf_fds() - Read fds as supplied by -F/--fd and --pass-fd options
  * @argc:	Argument count
  * @argv:	Command line options
- *
- * Return: fd number from --fd option, or -1 if not supplied
+ * @fds:	fd options structure to populate
  */
-int conf_tap_fd(int argc, char **argv)
+void conf_fds(int argc, char **argv, struct fd_opts *fds)
 {
-	const struct option optfd[] = {	{ "fd", required_argument, NULL, 'F' },
-					{ 0 }, };
-	const char *fdarg = NULL, *p;
-	unsigned long val;
+	const struct option opt[] = {
+		{ "fd",      required_argument, NULL, 'F' },
+		{ "pass-fd", required_argument, NULL, 34 },
+		{ 0 },
+	};
+	int old_opterr;
 	int name;
 
-	optind = 0;
-	do {
-		name = getopt_long(argc, argv, "-:F:", optfd, NULL);
-		if (name == 'F')
-			fdarg = optarg;
-	} while (name != -1);
-
-	if (!fdarg)
-		return -1;
-
-	p = fdarg;
-	if (!parse_unsigned(&p, 0, &val) || !parse_eoi(p) || val > INT_MAX)
-		die("Invalid --fd: %s", fdarg);
-
-	return val;
-}
-
-/**
- * conf_pass_fds() - Read fds as supplied by --pass-fd command line option
- * @c:		Execution context
- * @argc:	Argument count
- * @argv:	Command line options
- * @fds:	Array where we store the parsed fds
- * @max_fds:	Maximum size of the array
- *
- * Return: number of parsed fds, or -1 if option not specified
- */
-int conf_pass_fds(struct ctx *c, int argc, char **argv, int *fds, int max_fds)
-{
-	const struct option opt[] = { { "pass-fd", required_argument, NULL, 34 },
-				      { 0 }, };
-	int name, fds_cnt = 0;
-	bool opt_given = false;
-	int old_opterr;
+	fds->tap = -1;
+	fds->pass_fds_c = 0;
 
 	old_opterr = opterr;
 	opterr = 0;
 	optind = 0;
 	do {
-		name = getopt_long(argc, argv, "-:", opt, NULL);
-		if (name == 34) {
+		name = getopt_long(argc, argv, "-:F:", opt, NULL);
+		if (name == 'F') {
 			const char *p = optarg;
 			unsigned long val;
 
-			opt_given = true;
+			if (!parse_unsigned(&p, 0, &val) || !parse_eoi(p) ||
+			    val > INT_MAX)
+				die("Invalid --fd: %s", optarg);
+
+			fds->tap = (int)val;
+		} else if (name == 34) {
+			const char *p = optarg;
+			unsigned long val;
+
 			if (!parse_unsigned(&p, 0, &val) || !parse_eoi(p) ||
 			    val > INT_MAX)
 				die("Invalid --pass-fd: %s", optarg);
 
-			if (fds_cnt >= max_fds)
+			if (fds->pass_fds_c >= PASS_FDS_MAX)
 				die("Too many file descriptors in --pass-fd");
 
-			fds[fds_cnt++] = (int)val;
+			fds->pass_fds_v[fds->pass_fds_c++] = (int)val;
 		}
 	} while (name != -1);
 	opterr = old_opterr;
-
-	c->pasta_passed_fds = opt_given ? fds_cnt : 0;
-	if (!opt_given)
-		return -1;
-
-	return fds_cnt;
 }
 
 /**
@@ -1984,7 +1955,7 @@ void conf(struct ctx *c, int argc, char **argv)
 	else if (optind != argc)
 		die("Extra non-option argument: %s", argv[optind]);
 
-	if (c->pasta_passed_fds && *netns)
+	if (c->pasta_pass_fd && *netns)
 		die("--pass-fd can only be used when spawning a command");
 
 	if (c->no_pidns && *netns)
