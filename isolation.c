@@ -265,7 +265,6 @@ void isolate_fds(struct ctx *c, int argc, char **argv)
 	int kept_fds = 0;
 	int fds_cnt;
 	int prev_fd;
-	int next_fd;
 	int rc = 0;
 	int i;
 
@@ -290,7 +289,7 @@ void isolate_fds(struct ctx *c, int argc, char **argv)
 	prev_fd = STDERR_FILENO;
 
 	while (1) {
-		next_fd = -1;
+		int next_fd = -1;
 
 		/* Find the next-lowest fd to keep */
 		for (i = 0; i < fds_cnt; i++) {
