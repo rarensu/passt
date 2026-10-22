@@ -1143,6 +1143,10 @@ static void conf_sock_listen(const struct ctx *c)
  * @argc:	Argument count
  * @argv:	Command line options
  * @fds:	fd array to populate
+ *
+ * Should:
+ * - Assign the tap fd (or -1 if none) to the first element
+ *
  * Return: number of fds populated
  */
 int conf_fds(int argc, char **argv, int *fds)
@@ -1154,11 +1158,11 @@ int conf_fds(int argc, char **argv, int *fds)
 	};
 	int old_opterr;
 	int name;
-	int c;
+	unsigned n;
 
 	/* Tap fd is always first */
 	fds[0] = -1;
-	c = 1;
+	n = 1;
 
 	old_opterr = opterr;
 	opterr = 0;
@@ -1182,15 +1186,15 @@ int conf_fds(int argc, char **argv, int *fds)
 			    val > INT_MAX)
 				die("Invalid --pass-fd: %s", optarg);
 
-			if (c >= PASS_FDS_MAX)
+			if (n >= PASS_FDS_MAX)
 				die("Too many file descriptors in --pass-fd");
 
-			fds[c++] = (int)val;
+			fds[n++] = (int)val;
 		}
 	} while (name != -1);
 	opterr = old_opterr;
 	optind = 0;
-	return c;
+	return n;
 }
 
 /**
