@@ -1158,7 +1158,7 @@ int conf_fds(int argc, char **argv, int *fds)
 	};
 	int old_opterr;
 	int name;
-	unsigned n;
+	int n;
 
 	/* Tap fd is always first */
 	fds[0] = -1;
