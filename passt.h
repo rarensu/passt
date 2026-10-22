@@ -196,6 +196,7 @@ struct ip6_ctx {
  * @pasta_ifi:		Index of namespace interface for pasta
  * @pasta_conf_ns:	Configure namespace after creating it
  * @no_pidns:		Don't create a new PID namespace for spawned command
+ * @pasta_pass_fd:	Option --pass-fd was passed on command line
  * @fwd:		Forwarding tables
  * @fwd_pending:	Pending forward tables
  * @no_tcp:		Disable TCP operation
@@ -280,6 +281,7 @@ struct ctx {
 	unsigned int pasta_ifi;
 	int pasta_conf_ns;
 	bool no_pidns;
+	bool pasta_pass_fd;
 
 	struct fwd_table *fwd[PIF_NUM_TYPES];
 	struct fwd_table *fwd_pending[PIF_NUM_TYPES];

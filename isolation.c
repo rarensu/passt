@@ -250,32 +250,70 @@ void isolate_initial(void)
 }
 
 /*
- * isolate_fds() - Close leaked files, but not --fd, stdin, stdout, stderr
+ * isolate_fds() - Close leaked files, but not --fd, --pass-fd, standard streams
+ * @c:		Execution context
  * @argc:	Argument count
- * @argv:	Command line options, as we need to skip any file given via --fd
+ * @argv:	Command line options
  *
  * Should:
- *  - close all open files except for standard streams and the one from --fd
+ *  - close all open files except for standard streams, --fd, and --pass-fd
  *  - move the --fd descriptor out of the range 0-2
- *
- * Return: new fd number for descriptor from --fd, or -1 if not specified
  */
-int isolate_fds(int argc, char **argv)
+void isolate_fds(struct ctx *c, int argc, char **argv)
 {
-	int fd, close_from = STDERR_FILENO + 1;
+	int fds[PASS_FDS_MAX];
+	int kept_fds = 0;
+	int fds_cnt;
+	int prev_fd;
+	int rc = 0;
+	int i;
 
-	fd = conf_tap_fd(argc, argv);
+	fds_cnt = conf_fds(argc, argv, fds);
+	c->pasta_pass_fd = fds_cnt > 1;
 
-	if (fd >= 0) {
-		/* Move the passed fd to a more convenient location */
-		if (fd != close_from			&&
-		    (dup2(fd, close_from) != close_from	||
-		     close(fd)))
-			die_perror("Could not move --fd descriptor");
-		fd = close_from++;
+	if (fds[0] >= 0 && fds[0] < 3) {
+		/* Move the tap fd to a safer location */
+		int new_fd = fcntl(fds[0], F_DUPFD, STDERR_FILENO + 1);
+
+		if (new_fd < 0)
+			die_perror("Could not relocate --fd descriptor");
+
+		close(fds[0]);
+		fds[0] = new_fd;
+	}
+	c->fd_tap = fds[0];
+
+	rc = 0;
+
+	/* Keep standard streams */
+	prev_fd = STDERR_FILENO;
+
+	while (1) {
+		int next_fd = -1;
+
+		/* Find the next-lowest fd to keep */
+		for (i = 0; i < fds_cnt; i++) {
+			if (fds[i] > prev_fd && (next_fd == -1 || fds[i] < next_fd))
+				next_fd = fds[i];
+		}
+
+		if (next_fd == -1)
+			break;
+
+		if (next_fd > prev_fd + 1) {
+			/* Close fds between two kept fds */
+			if (close_range(prev_fd + 1, next_fd - 1, CLOSE_RANGE_UNSHARE))
+				rc = -1;
+		}
+		prev_fd = next_fd;
+		kept_fds++;
 	}
 
-	if (close_range(close_from, ~0U, CLOSE_RANGE_UNSHARE)) {
+	/* Close all other fds */
+	if (close_range(prev_fd + 1, ~0U, CLOSE_RANGE_UNSHARE))
+		rc = -1;
+
+	if (rc) {
 		if (errno == ENOSYS || errno == EINVAL) {
 			/* This probably means close_range() or the
 			 * CLOSE_RANGE_UNSHARE flag is not supported by the
@@ -288,8 +326,8 @@ int isolate_fds(int argc, char **argv)
 			die_perror("Failed to close files leaked by parent");
 		}
 	}
-
-	return fd;
+	if (c->pasta_pass_fd)
+		debug("Kept %i user-passed file descriptors", c->fd_tap < 0 ? kept_fds : kept_fds - 1);
 }
 
 /**
