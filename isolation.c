@@ -250,46 +250,63 @@ void isolate_initial(void)
 }
 
 /*
- * isolate_fds() - Close leaked files, but not --fd, stdin, stdout, stderr
+ * isolate_fds() - Close leaked files if applicable
+ * @c:		Execution context
  * @argc:	Argument count
- * @argv:	Command line options, as we need to skip any file given via --fd
+ * @argv:	Command line options
  *
  * Should:
- *  - close all open files except for standard streams and the one from --fd
+ *  - close all open files except for standard streams and the one from --fd,
+      unless --pass-fds is used, in which case all fds are preserved
  *  - move the --fd descriptor out of the range 0-2
- *
- * Return: new fd number for descriptor from --fd, or -1 if not specified
+ *  - update the execution context
  */
-int isolate_fds(int argc, char **argv)
+void isolate_fds(struct ctx *c, int argc, char **argv)
 {
-	int fd, close_from = STDERR_FILENO + 1;
+	conf_fds(c, argc, argv);
 
-	fd = conf_tap_fd(argc, argv);
+	if (c->fd_tap >= 0 && c->fd_tap < STDERR_FILENO + 1) {
+		/* Move the tap fd to a safer location */
+		int new_fd = fcntl(c->fd_tap, F_DUPFD, STDERR_FILENO + 1);
 
-	if (fd >= 0) {
-		/* Move the passed fd to a more convenient location */
-		if (fd != close_from			&&
-		    (dup2(fd, close_from) != close_from	||
-		     close(fd)))
-			die_perror("Could not move --fd descriptor");
-		fd = close_from++;
+		if (new_fd < 0)
+			die_perror("Could not relocate --fd descriptor");
+
+		close(c->fd_tap);
+		c->fd_tap = new_fd;
 	}
 
-	if (close_range(close_from, ~0U, CLOSE_RANGE_UNSHARE)) {
-		if (errno == ENOSYS || errno == EINVAL) {
-			/* This probably means close_range() or the
-			 * CLOSE_RANGE_UNSHARE flag is not supported by the
-			 * kernel.  Not much we can do here except carry on and
-			 * hope for the best.
-			 */
-			warn(
-"Can't use close_range() to ensure no files leaked by parent");
-		} else {
-			die_perror("Failed to close files leaked by parent");
+	/* Close leaked file descriptors unless --pass-fds is used */
+	if (!c->pasta_pass_fds) {
+		int rc = 0;
+		/* Keep standard streams and the tap fd (if given) */
+		int keep = c->fd_tap >= STDERR_FILENO ? c->fd_tap : STDERR_FILENO;
+
+		if (keep > STDERR_FILENO + 1) {
+			/* Tap fd was relocated to above some other leaked fd(s)*/
+			/* Close fds between stderr and the tap fd */
+			if (close_range(STDERR_FILENO + 1, keep - 1, CLOSE_RANGE_UNSHARE))
+				rc = -1;
+		}
+
+		/* Close all other fds */
+		if (close_range(keep + 1, ~0U, CLOSE_RANGE_UNSHARE))
+			rc = -1;
+
+		if (rc) {
+			if (errno == ENOSYS || errno == EINVAL) {
+				/* This probably means close_range() or the
+				* CLOSE_RANGE_UNSHARE flag is not supported by the
+				* kernel.  Not much we can do here except carry on and
+				* hope for the best.
+				*/
+				warn(
+	"Can't use close_range() to ensure no files leaked by parent");
+			} else {
+				die_perror("Failed to close files leaked by parent");
+			}
 		}
 	}
-
-	return fd;
 }
 
 /**
